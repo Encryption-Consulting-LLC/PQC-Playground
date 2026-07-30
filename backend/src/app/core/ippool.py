@@ -1,9 +1,11 @@
 """Guest IP allocation pool.
 
-One document per address in the operator-configured guest range (``guest*``
-fields on the settings singleton), pre-seeded so allocation is a single atomic
-``find_one_and_update`` — no next-free computation, no race between concurrent
-worker tasks, and exhaustion is simply "no document matched".
+One document per *assignable* address in the operator-configured guest range
+(``guest*`` fields on the settings singleton) — subnet network and broadcast
+addresses are filtered out by ``is_assignable`` and never seeded. Pre-seeding
+makes allocation a single atomic ``find_one_and_update`` — no next-free
+computation, no race between concurrent worker tasks, and exhaustion is simply
+"no document matched".
 
 Document shape (collection ``ip_pool``)::
 
@@ -74,9 +76,34 @@ def guest_network_from_doc(doc: dict | None) -> GuestNetwork | None:
     )
 
 
-def range_ips(start: str, end: str) -> list[str]:
-    """Expand an inclusive IPv4 range; raises ValueError on a malformed or
-    oversized range (callers surface it as a 422 on operator input)."""
+def is_assignable(ip: int, prefix: int) -> bool:
+    """False for an address that is the network or broadcast address of its
+    ``/prefix`` subnet — a guest can never hold one of those.
+
+    The check is per-subnet, not per-octet: on a /24 that's the familiar ``.0``
+    and ``.255``, but a range spanning a /23 keeps the ``.255``/``.0`` pair in
+    the middle, and a /25 also drops ``.127``/``.128``. Prefixes 31 and 32 have
+    no reserved addresses (RFC 3021 point-to-point / single host), so every
+    address stays assignable there.
+    """
+    if prefix >= 31:
+        return True
+    host_mask = (1 << (32 - prefix)) - 1
+    host_bits = ip & host_mask
+    return host_bits != 0 and host_bits != host_mask
+
+
+def range_ips(start: str, end: str, prefix: int) -> list[str]:
+    """Expand an inclusive IPv4 range into its assignable addresses, skipping
+    the network/broadcast address of every ``/prefix`` subnet the range touches.
+
+    Raises ValueError on a malformed, oversized, or entirely-reserved range
+    (callers surface it as a 422 on operator input). The size cap is applied to
+    the raw span, before filtering — it guards against a typo'd range seeding a
+    runaway collection, so it must not be softened by the exclusions.
+    """
+    if not 1 <= prefix <= 32:
+        raise ValueError(f"Guest prefix /{prefix} is not between 1 and 32.")
     lo, hi = IPv4Address(start), IPv4Address(end)
     if hi < lo:
         raise ValueError(f"Guest IP range end {end} is below start {start}.")
@@ -84,13 +111,23 @@ def range_ips(start: str, end: str) -> list[str]:
     max_size = _max_pool_size()
     if size > max_size:
         raise ValueError(f"Guest IP range spans {size} addresses (max {max_size}).")
-    return [str(IPv4Address(n)) for n in range(int(lo), int(hi) + 1)]
+    ips = [
+        str(IPv4Address(n))
+        for n in range(int(lo), int(hi) + 1)
+        if is_assignable(n, prefix)
+    ]
+    if not ips:
+        raise ValueError(
+            f"Guest IP range {start}-{end} contains no assignable addresses on a "
+            f"/{prefix} — every address in it is a network or broadcast address."
+        )
+    return ips
 
 
 def validate_network(net: GuestNetwork) -> None:
     """Raise ValueError on a malformed range, gateway, or DNS address —
     operator input is rejected here (422) rather than failing a deploy later."""
-    range_ips(net.ip_start, net.ip_end)
+    range_ips(net.ip_start, net.ip_end, net.prefix)
     for label, value in (
         ("gateway", net.gateway),
         ("dns1", net.dns1),
@@ -110,9 +147,11 @@ def validate_network(net: GuestNetwork) -> None:
 # API process (async)                                                         #
 # --------------------------------------------------------------------------- #
 async def sync_pool_async(net: GuestNetwork | None) -> None:
-    """Reconcile the pool with the configured range: seed missing addresses as
-    free, drop free addresses that fell out of the range. Allocated documents
-    are never touched — an out-of-range allocation lives until released.
+    """Reconcile the pool with the configured range: seed missing assignable
+    addresses as free, drop free addresses that fell out of it. Allocated
+    documents are never touched — an out-of-range allocation lives until
+    released, which also covers an address seeded before it was reclassified as
+    network/broadcast: it stays with its VM and simply isn't re-seeded once freed.
 
     ``net=None`` (range unconfigured/cleared) drops every free document, so a
     cleared range immediately stops handing out addresses.
@@ -122,7 +161,7 @@ async def sync_pool_async(net: GuestNetwork | None) -> None:
         await col.delete_many({"status": "free"})
         return
 
-    ips = range_ips(net.ip_start, net.ip_end)
+    ips = range_ips(net.ip_start, net.ip_end, net.prefix)
     await col.bulk_write(
         [
             UpdateOne(

@@ -15,8 +15,11 @@
 #   6. Seed the first admin account on the FIRST deploy only (prompts for
 #      credentials interactively, or auto-generates a password unattended).
 #      Redeploys detect the existing admin and skip this entirely — no prompt.
-#   7. Install and (re)start systemd *user* services: API and both Celery
-#      workers. Enable linger so they start at boot.
+#   7. Regenerate the systemd *user* units from scratch (API + both Celery
+#      workers + pki.target) and start them. Enable linger so they start at
+#      boot. Regenerating rather than overwriting is what keeps a unit from an
+#      earlier deploy at a different APP_DIR from lingering, enabled, and
+#      crash-looping against a path that no longer exists.
 #
 # The executor binary is a Windows artifact — it is NOT run here; it is
 # fetched so the worker can bundle it into firstboot ISOs.
@@ -61,6 +64,12 @@ MONGO_URL="${MONGO_URL:-mongodb://localhost:27017}"
 VALKEY_URL="${VALKEY_URL:-redis://localhost:6379/0}"
 
 SYSTEMD_DIR="$HOME/.config/systemd/user"
+
+# The full unit set this script owns. It is regenerated from scratch on every
+# run (step 7), so this list is also the authoritative teardown list — a unit
+# dropped from here stops being installed at all.
+SERVICES=(pki-api.service pki-worker-esxi.service pki-worker-provision.service)
+UNITS=("${SERVICES[@]}" pki.target)
 
 # ----------------------------------------------------------------------------
 # Helpers
@@ -170,6 +179,15 @@ BACKEND="$APP_DIR/backend"
 FRONTEND="$APP_DIR/frontend"
 ADMIN="$APP_DIR/admin"
 AGENT_DIR="$BACKEND/agent"
+
+# Fail here rather than in systemd. The units below set WorkingDirectory=$BACKEND,
+# and systemd reports a missing WorkingDirectory as
+#   Failed at step CHDIR spawning <ExecStart>: No such file or directory
+# which reads like the ExecStart binary (uv) is missing when the real fault is
+# the directory — so a wrong APP_DIR turns into a misleading uv-is-missing hunt.
+for d in "$BACKEND" "$FRONTEND" "$ADMIN"; do
+  [ -d "$d" ] || die "$d is missing — is APP_DIR ($APP_DIR) really the app checkout?"
+done
 
 # ----------------------------------------------------------------------------
 # 2. Ensure backend/.env — generated secrets + prompted-once site config
@@ -315,10 +333,25 @@ fi
 
 # ----------------------------------------------------------------------------
 # 7. systemd user services
+#
+#    The unit set is regenerated from scratch, not patched in place: every value
+#    baked into it (WorkingDirectory, the uv path, host/port) is derived from
+#    wherever this checkout happens to live, so a unit written by an earlier
+#    deploy from a different APP_DIR is stale in ways an overwrite alone does
+#    not clean up — it stays enabled, and with linger on, systemd crash-loops it
+#    against the dead path (that is the "Failed at step CHDIR" error) for as
+#    long as it remains installed. So: stop, disable, delete, reload, then write.
 # ----------------------------------------------------------------------------
-log "Installing systemd user units into $SYSTEMD_DIR"
+log "Regenerating systemd user units in $SYSTEMD_DIR"
 mkdir -p "$SYSTEMD_DIR"
 UV_BIN="$(command -v uv)"
+
+# Tear down whatever is installed first. All three tolerate absent/unknown units
+# (a first deploy, or a unit renamed since), hence the `|| true`.
+systemctl --user stop "${SERVICES[@]}" 2>/dev/null || true
+systemctl --user disable "${UNITS[@]}" 2>/dev/null || true
+for unit in "${UNITS[@]}"; do rm -f "$SYSTEMD_DIR/$unit"; done
+systemctl --user daemon-reload
 
 # API — single uvicorn worker on purpose: the agent-dispatch bridge forwards to
 # whichever process holds the agent WebSocket, so multiple workers would break
@@ -377,7 +410,7 @@ EOF
 cat >"$SYSTEMD_DIR/pki.target" <<EOF
 [Unit]
 Description=EC PKI Playground — full stack
-Wants=pki-api.service pki-worker-esxi.service pki-worker-provision.service
+Wants=${SERVICES[*]}
 
 [Install]
 WantedBy=default.target
@@ -390,18 +423,16 @@ if ! loginctl show-user "$USER" 2>/dev/null | grep -q 'Linger=yes'; then
     || warn "Could not enable linger — services won't start until you next log in. Run: sudo loginctl enable-linger $USER"
 fi
 
-log "Reloading and (re)starting services"
-SERVICES=(pki-api.service pki-worker-esxi.service pki-worker-provision.service)
+log "Reloading and starting services"
 systemctl --user daemon-reload
-systemctl --user enable pki.target "${SERVICES[@]}"
-systemctl --user restart "${SERVICES[@]}"
+systemctl --user enable "${UNITS[@]}"
+systemctl --user start "${SERVICES[@]}"
 
 # ----------------------------------------------------------------------------
 # Done
 # ----------------------------------------------------------------------------
 log "Deploy complete. Status:"
-systemctl --user --no-pager --no-legend status \
-  pki-api.service pki-worker-esxi.service pki-worker-provision.service \
+systemctl --user --no-pager --no-legend status "${SERVICES[@]}" \
   | sed -n '1,4p;/Active:/p' || true
 
 cat <<EOF

@@ -423,6 +423,10 @@ export function InfrastructureSection() {
                 <div className="space-y-1.5"><Label htmlFor="guest-dns2">Secondary DNS</Label><Input id="guest-dns2" value={form.guestDns2} onChange={(e) => patch("guestDns2", e.target.value)} /></div>
                 <div className="space-y-1.5 sm:col-span-3"><Label htmlFor="guest-suffix">DNS suffix</Label><Input id="guest-suffix" value={form.guestDnsSuffix} onChange={(e) => patch("guestDnsSuffix", e.target.value)} placeholder="encon.pki" /></div>
               </div>
+              <p className="mt-(--gap-row) text-xs text-muted-foreground">
+                The range is inclusive. Network and broadcast addresses of each /{form.guestPrefix || "24"} subnet
+                it spans (e.g. .0 and .255 on a /24) are skipped and never handed to a VM.
+              </p>
             </TabsPanel>
 
             <TabsPanel value="image" className="mt-(--gap-stack)">
