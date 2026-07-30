@@ -12,7 +12,7 @@ when bundled) — so a booted VM connects within minutes. Role/feature installs
 (AD DS, AD CS, IIS) are *not* baked here: the agent's provision commands
 (``dc.install_forest``, ``ca.install``, ``iis.setup``) run ``Install-Windows\
 Feature`` themselves and are dispatched *after* phone-home, so the (slow) work
-runs as a visible orchestrator step instead of blocking the connection.
+runs as a visible executor step instead of blocking the connection.
 ``role_scripts_for`` remains the hook for a genuinely firstboot-only script (one
 that must run *before* the agent), but the shipping templates carry none.
 
@@ -40,8 +40,8 @@ from app.core.infrastructure import LINUX_PRODUCT_TEMPLATES
 
 #: On-disc name for the embedded agent binary — what the install script and the
 #: agent's Windows service expect (see ``assets/firstboot/_agent``).
-_AGENT_BINARY_NAME = "pki-orchestrator.exe"
-_AGENT_CONFIG_NAME = "orchestrator.toml"
+_AGENT_BINARY_NAME = "pki-executor.exe"
+_AGENT_CONFIG_NAME = "executor.toml"
 #: Static install step appended when an agent is bundled. Lives under
 #: ``_agent`` (leading underscore → not a template dir, never role-globbed).
 _AGENT_INSTALL_SCRIPT = (
@@ -49,16 +49,16 @@ _AGENT_INSTALL_SCRIPT = (
     / "assets"
     / "firstboot"
     / "_agent"
-    / "40-install-orchestrator.ps1"
+    / "40-install-executor.ps1"
 )
 
 
 @dataclass(frozen=True)
 class AgentBundle:
-    """The pki-orchestrator payload to embed in a firstboot ISO.
+    """The pki-executor payload to embed in a firstboot ISO.
 
     ``binary_path`` is the worker-host path to the agent exe;
-    ``config_toml`` is the rendered ``orchestrator.toml`` (identity + backend —
+    ``config_toml`` is the rendered ``executor.toml`` (identity + backend —
     no per-template config; that's dispatched after phone-home).
     """
 
@@ -144,7 +144,7 @@ def build_firstboot_iso(
     When an ``AgentBundle`` is given, the ISO switches to
     isokit's v2
     ``build_config_iso`` and additionally carries the agent binary + rendered
-    ``orchestrator.toml`` as payload files plus a static install step — so the
+    ``executor.toml`` as payload files plus a static install step — so the
     booted VM installs and starts the phone-home agent.
 
     Raises ``KeyError`` on an unknown template (routes validate against
@@ -162,7 +162,7 @@ def build_firstboot_iso(
 
     if platform == "linux" and agent is not None:
         raise ValueError(
-            "The Windows orchestrator agent cannot be bundled into a Linux template."
+            "The Windows executor agent cannot be bundled into a Linux template."
         )
 
     hostname_script = dest_dir / f"10-hostname.{extension}"

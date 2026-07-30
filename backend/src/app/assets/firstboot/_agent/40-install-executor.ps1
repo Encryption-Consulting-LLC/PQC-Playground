@@ -1,4 +1,4 @@
-# Install the pki-orchestrator agent from the firstboot payload (Phase F).
+# Install the pki-executor agent from the firstboot payload (Phase F).
 #
 # The v2 firstboot runner stages ISO payload `files` to a transient directory
 # exported as $env:FIRSTBOOT_FILES_DIR and deletes it afterwards — so this step
@@ -14,18 +14,18 @@ $ErrorActionPreference = 'Stop'
 if (-not $env:FIRSTBOOT_FILES_DIR) {
     # A pre-v2 runner never sets this (it ignores the manifest's `files`), so the
     # payload was never staged. Fail loudly rather than with a confusing path error.
-    throw 'FIRSTBOOT_FILES_DIR is not set — this base image predates the v2 firstboot runner; rebuild the golden image before enabling orchestrator bundling.'
+    throw 'FIRSTBOOT_FILES_DIR is not set — this base image predates the v2 firstboot runner; rebuild the golden image before enabling executor bundling.'
 }
 
-$stagedBinary = Join-Path $env:FIRSTBOOT_FILES_DIR 'pki-orchestrator.exe'
-$stagedConfig = Join-Path $env:FIRSTBOOT_FILES_DIR 'orchestrator.toml'
+$stagedBinary = Join-Path $env:FIRSTBOOT_FILES_DIR 'pki-executor.exe'
+$stagedConfig = Join-Path $env:FIRSTBOOT_FILES_DIR 'executor.toml'
 
-$installDir = Join-Path $env:ProgramFiles 'PkiOrchestrator'
-$dataDir = Join-Path $env:ProgramData 'PkiOrchestrator'
+$installDir = Join-Path $env:ProgramFiles 'PkiExecutor'
+$dataDir = Join-Path $env:ProgramData 'PkiExecutor'
 New-Item -ItemType Directory -Force -Path $installDir | Out-Null
 New-Item -ItemType Directory -Force -Path $dataDir | Out-Null
 
-$exePath = Join-Path $installDir 'pki-orchestrator.exe'
+$exePath = Join-Path $installDir 'pki-executor.exe'
 $configPath = Join-Path $dataDir 'config.toml'   # matches config.rs default_path
 Copy-Item -Path $stagedBinary -Destination $exePath -Force
 Copy-Item -Path $stagedConfig -Destination $configPath -Force
@@ -37,4 +37,4 @@ icacls $configPath /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Nul
 # Register the SCM service (AutoStart). The runner's reboot starts it; we do NOT.
 & $exePath service install
 
-Write-Output 'pki-orchestrator installed'
+Write-Output 'pki-executor installed'
