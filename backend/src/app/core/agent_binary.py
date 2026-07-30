@@ -1,13 +1,13 @@
-"""Helpers for locating and hashing the bundled orchestrator agent."""
+"""Helpers for locating and hashing the bundled executor agent."""
 
 import hashlib
 from pathlib import Path
 
 
-def bundled_orchestrator_agent_path() -> str | None:
+def bundled_executor_agent_path() -> str | None:
     """Return the repo-bundled agent path when this checkout includes one."""
 
-    path = Path(__file__).resolve().parents[3] / "agent" / "pki-orchestrator.exe"
+    path = Path(__file__).resolve().parents[3] / "agent" / "pki-executor.exe"
     return str(path) if path.is_file() else None
 
 

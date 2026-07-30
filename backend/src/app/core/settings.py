@@ -25,7 +25,7 @@ fail-fast validated below; generate each with ``openssl rand -base64 32``:
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-from app.core.agent_binary import bundled_orchestrator_agent_path
+from app.core.agent_binary import bundled_executor_agent_path
 
 
 class Settings(BaseSettings):
@@ -126,7 +126,7 @@ class Settings(BaseSettings):
     # golden images whose runner predates the v2 manifest. Per-template
     # provisioning config is NOT baked here — it lives on
     # the VM registry and is dispatched after the agent phones home.
-    orchestrator_agent_path: str | None = bundled_orchestrator_agent_path()
+    orchestrator_agent_path: str | None = bundled_executor_agent_path()
     backend_public_url: str | None = None
 
     # ``AGENT_BACKEND_URL`` — optional override for the origin baked into the
