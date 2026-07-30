@@ -7,7 +7,7 @@
 #   2. Ensure backend/.env and deploy/.env exist — prompting once for any
 #      site-specific value still missing, then persisting it so re-runs are
 #      non-interactive.
-#   3. Install backend deps (uv sync) and download the Windows orchestrator
+#   3. Install backend deps (uv sync) and download the Windows executor
 #      agent (wget from GitHub Releases) into backend/agent/.
 #   4. Build the frontend and admin app (pnpm build → */dist), both served
 #      same-origin by the API's static mounts.
@@ -18,7 +18,7 @@
 #   7. Install and (re)start systemd *user* services: API and both Celery
 #      workers. Enable linger so they start at boot.
 #
-# The orchestrator binary is a Windows artifact — it is NOT run here; it is
+# The executor binary is a Windows artifact — it is NOT run here; it is
 # fetched so the worker can bundle it into firstboot ISOs.
 #
 # This script bakes in no site-specific values, so it is safe to publish. Site
@@ -27,7 +27,7 @@
 # runs read those files and prompt only for whatever is still missing. Any value
 # can be forced non-interactively by exporting it inline, e.g.:
 #   BACKEND_PUBLIC_URL=https://pki.example.com \
-#   ORCH_RELEASE_REPO=example-org/pki-orchestrator ./deploy/prod-deploy.sh
+#   EXEC_RELEASE_REPO=example-org/pki-executor ./deploy/prod-deploy.sh
 #
 set -euo pipefail
 
@@ -44,7 +44,7 @@ BRANCH="${BRANCH:-master}"
 
 # Persisted deploy-time answers (git-ignored by the repo's `.env` rule). Holds
 # the site-specific, sometimes-secret values this script no longer hardcodes:
-# REPO_URL, ORCH_RELEASE_REPO, GITHUB_TOKEN. Created 0600 (may hold a token).
+# REPO_URL, EXEC_RELEASE_REPO, GITHUB_TOKEN. Created 0600 (may hold a token).
 DEPLOY_ENV="$SCRIPT_DIR/.env"
 touch "$DEPLOY_ENV" && chmod 600 "$DEPLOY_ENV"
 
@@ -53,8 +53,8 @@ touch "$DEPLOY_ENV" && chmod 600 "$DEPLOY_ENV"
 # below (prompt-once, persist) rather than hardcoded here.
 API_HOST="${API_HOST:-127.0.0.1}"
 API_PORT="${API_PORT:-8000}"
-ORCH_RELEASE_TAG="${ORCH_RELEASE_TAG:-latest}"   # git tag, or "latest"
-ORCH_ASSET="${ORCH_ASSET:-pki-orchestrator.exe}" # asset filename on the release
+EXEC_RELEASE_TAG="${EXEC_RELEASE_TAG:-latest}"   # git tag, or "latest"
+EXEC_ASSET="${EXEC_ASSET:-pki-executor.exe}"     # asset filename on the release
 
 # Datastores are assumed already running; we only health-check them.
 MONGO_URL="${MONGO_URL:-mongodb://localhost:27017}"
@@ -134,12 +134,12 @@ done
 
 # Resolve deploy-time config (persisted to deploy/.env; prompted once). REPO_URL
 # defaults to this checkout's own origin remote, so the common in-place upgrade
-# needs no input. ORCH_RELEASE_REPO/GITHUB_TOKEN gate the agent download below.
+# needs no input. EXEC_RELEASE_REPO/GITHUB_TOKEN gate the agent download below.
 ensure_var "$DEPLOY_ENV" REPO_URL \
   "Git repo URL to deploy from" \
   "$(git -C "$REPO_ROOT" remote get-url origin 2>/dev/null || true)"
-ensure_var "$DEPLOY_ENV" ORCH_RELEASE_REPO \
-  "Orchestrator agent release repo (owner/repo, blank to skip agent download)" \
+ensure_var "$DEPLOY_ENV" EXEC_RELEASE_REPO \
+  "Executor agent release repo (owner/repo, blank to skip agent download)" \
   "" optional
 ensure_var "$DEPLOY_ENV" GITHUB_TOKEN \
   "GitHub token for private release assets (blank for a public repo)" \
@@ -201,37 +201,37 @@ grep -Eq '^[[:space:]]*ESXI_HOST=' "$ENV_FILE" || \
   warn "ESXI_* / GUEST_* not set in .env — configure them here or via the operator Settings UI before deploying VMs."
 
 # ----------------------------------------------------------------------------
-# 3. Backend deps + orchestrator agent
+# 3. Backend deps + executor agent
 # ----------------------------------------------------------------------------
 log "Installing backend deps (uv sync)"
 ( cd "$BACKEND" && uv sync )
 
 mkdir -p "$AGENT_DIR"
-if [ -z "${ORCH_RELEASE_REPO:-}" ]; then
-  if [ -f "$AGENT_DIR/pki-orchestrator.exe" ]; then
-    warn "ORCH_RELEASE_REPO unset — skipping agent download; keeping the existing pki-orchestrator.exe."
+if [ -z "${EXEC_RELEASE_REPO:-}" ]; then
+  if [ -f "$AGENT_DIR/pki-executor.exe" ]; then
+    warn "EXEC_RELEASE_REPO unset — skipping agent download; keeping the existing pki-executor.exe."
   else
-    warn "ORCH_RELEASE_REPO unset and no bundled agent present — firstboot ISOs will be agent-free."
+    warn "EXEC_RELEASE_REPO unset and no bundled agent present — firstboot ISOs will be agent-free."
   fi
 else
-  log "Downloading orchestrator agent ($ORCH_RELEASE_REPO@$ORCH_RELEASE_TAG / $ORCH_ASSET)"
-  if [ "$ORCH_RELEASE_TAG" = "latest" ]; then
-    ORCH_URL="https://github.com/$ORCH_RELEASE_REPO/releases/latest/download/$ORCH_ASSET"
+  log "Downloading executor agent ($EXEC_RELEASE_REPO@$EXEC_RELEASE_TAG / $EXEC_ASSET)"
+  if [ "$EXEC_RELEASE_TAG" = "latest" ]; then
+    EXEC_URL="https://github.com/$EXEC_RELEASE_REPO/releases/latest/download/$EXEC_ASSET"
   else
-    ORCH_URL="https://github.com/$ORCH_RELEASE_REPO/releases/download/$ORCH_RELEASE_TAG/$ORCH_ASSET"
+    EXEC_URL="https://github.com/$EXEC_RELEASE_REPO/releases/download/$EXEC_RELEASE_TAG/$EXEC_ASSET"
   fi
   WGET_ARGS=(--quiet --show-progress)
   [ -n "${GITHUB_TOKEN:-}" ] && WGET_ARGS+=(--header="Authorization: Bearer $GITHUB_TOKEN")
   TMP_AGENT="$(mktemp)"
-  if wget "${WGET_ARGS[@]}" -O "$TMP_AGENT" "$ORCH_URL" && [ -s "$TMP_AGENT" ]; then
-    mv "$TMP_AGENT" "$AGENT_DIR/pki-orchestrator.exe"
-    log "Agent updated ($(du -h "$AGENT_DIR/pki-orchestrator.exe" | cut -f1))"
+  if wget "${WGET_ARGS[@]}" -O "$TMP_AGENT" "$EXEC_URL" && [ -s "$TMP_AGENT" ]; then
+    mv "$TMP_AGENT" "$AGENT_DIR/pki-executor.exe"
+    log "Agent updated ($(du -h "$AGENT_DIR/pki-executor.exe" | cut -f1))"
   else
     rm -f "$TMP_AGENT"
-    if [ -f "$AGENT_DIR/pki-orchestrator.exe" ]; then
-      warn "Agent download failed ($ORCH_URL) — keeping the existing pki-orchestrator.exe."
+    if [ -f "$AGENT_DIR/pki-executor.exe" ]; then
+      warn "Agent download failed ($EXEC_URL) — keeping the existing pki-executor.exe."
     else
-      die "Agent download failed ($ORCH_URL) and no existing binary present. Fix ORCH_RELEASE_* (and GITHUB_TOKEN if private)."
+      die "Agent download failed ($EXEC_URL) and no existing binary present. Fix EXEC_RELEASE_* (and GITHUB_TOKEN if private)."
     fi
   fi
 fi
