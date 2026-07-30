@@ -38,7 +38,7 @@ from vmkit import clone_workflow, destroy_workflow, open_connection
 from vmkit.errors import VmExistsError, VmkitError, VmNotFoundError
 from vmkit.esxi import get_vm_by_name
 
-from configgen import OrchestratorAgentConfig, render_orchestrator_config
+from configgen import ExecutorAgentConfig, render_executor_config
 
 from app.celery_app import celery_app
 from app.core import agents
@@ -915,8 +915,8 @@ def _run_clone_op(
                     )
                     agent_bundle = AgentBundle(
                         binary_path=Path(settings.orchestrator_agent_path),
-                        config_toml=render_orchestrator_config(
-                            OrchestratorAgentConfig(
+                        config_toml=render_executor_config(
+                            ExecutorAgentConfig(
                                 vm_id=vm_id,
                                 agent_token=token,
                                 backend_url=settings.effective_agent_backend_url,

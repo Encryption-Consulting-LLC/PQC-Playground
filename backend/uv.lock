@@ -285,8 +285,8 @@ wheels = [
 
 [[package]]
 name = "configgen"
-version = "0.2.0"
-source = { git = "https://github.com/Encryption-Consulting-LLC/configgen.git?tag=v0.2.0#6cecc7709f082dcf8d0f4f8ab925a134626a39c5" }
+version = "0.3.0"
+source = { git = "https://github.com/Encryption-Consulting-LLC/configgen.git?tag=v0.3.0#3c6dcb7ad7aa7058083bd29a1b4f1e04a5e0fe54" }
 dependencies = [
     { name = "tomli-w" },
 ]
@@ -505,7 +505,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "celery", specifier = ">=5.6" },
-    { name = "configgen", git = "https://github.com/Encryption-Consulting-LLC/configgen.git?tag=v0.2.0" },
+    { name = "configgen", git = "https://github.com/Encryption-Consulting-LLC/configgen.git?tag=v0.3.0" },
     { name = "cryptography", specifier = ">=44" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
