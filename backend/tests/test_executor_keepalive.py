@@ -5,7 +5,7 @@ import contextlib
 
 import pytest
 
-from app.routers import orchestrator
+from app.routers import executor
 
 
 def test_keepalive_retries_after_a_transient_refresh_error(monkeypatch):
@@ -23,8 +23,8 @@ def test_keepalive_retries_after_a_transient_refresh_error(monkeypatch):
         async def no_delay(_seconds):
             await asyncio.sleep(0)
 
-        monkeypatch.setattr(orchestrator.agentbus, "refresh_agent_live", refresh)
-        task = asyncio.create_task(orchestrator._keepalive("vm-1", sleep=no_delay))
+        monkeypatch.setattr(executor.agentbus, "refresh_agent_live", refresh)
+        task = asyncio.create_task(executor._keepalive("vm-1", sleep=no_delay))
         try:
             await asyncio.wait_for(refreshed.wait(), timeout=1)
         finally:
@@ -39,12 +39,12 @@ def test_keepalive_retries_after_a_transient_refresh_error(monkeypatch):
 
 def test_initial_lease_failure_does_not_leak_a_green_presence(monkeypatch):
     vm_id = "vm-initial-lease-failure"
-    orchestrator.agents._connected.pop(vm_id, None)
+    executor.agents._connected.pop(vm_id, None)
 
     class _WebSocket:
         headers = {
-            "x-orchestrator-vm-id": vm_id,
-            "x-orchestrator-token": "token",
+            "x-executor-vm-id": vm_id,
+            "x-executor-token": "token",
         }
         query_params = {}
 
@@ -60,11 +60,11 @@ def test_initial_lease_failure_does_not_leak_a_green_presence(monkeypatch):
     async def clear(_vm_id):
         pass
 
-    monkeypatch.setattr(orchestrator, "_authenticate", authenticated)
-    monkeypatch.setattr(orchestrator.agentbus, "mark_agent_live", fail_mark)
-    monkeypatch.setattr(orchestrator.agentbus, "clear_agent_live", clear)
+    monkeypatch.setattr(executor, "_authenticate", authenticated)
+    monkeypatch.setattr(executor.agentbus, "mark_agent_live", fail_mark)
+    monkeypatch.setattr(executor.agentbus, "clear_agent_live", clear)
 
     with pytest.raises(ConnectionError, match="Valkey unavailable"):
-        asyncio.run(orchestrator.connect(_WebSocket()))
+        asyncio.run(executor.connect(_WebSocket()))
 
-    assert orchestrator.agents.resolve_agent(vm_id) is None
+    assert executor.agents.resolve_agent(vm_id) is None

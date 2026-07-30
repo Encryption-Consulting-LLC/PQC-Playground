@@ -1,14 +1,14 @@
-"""Orchestrator phone-home routes.
+"""Executor phone-home routes.
 
-The Rust ``pki-orchestrator`` agent connects outbound to
-``ws /api/orchestrator/connect`` once running, authenticating with a
+The Rust ``pki-executor`` agent connects outbound to
+``ws /api/executor/connect`` once running, authenticating with a
 vm_id/token pair. Two ways that pair exists:
 
 * **Persisted:** the clone worker mints it and stores the hash on the
-  VM's ``vm_registry`` document; the agent binary + its ``orchestrator.toml``
+  VM's ``vm_registry`` document; the agent binary + its ``executor.toml``
   are baked onto the firstboot ISO, so a real deployed agent phones home with
   no human in the loop.
-* **Pending (manual/dev):** ``POST /orchestrator/register`` mints an in-process
+* **Pending (manual/dev):** ``POST /executor/register`` mints an in-process
   pair a human pastes into a local config.
 
 Provisioning is **plan-driven**: the connect handler no longer
@@ -24,7 +24,7 @@ Auth is validated before ``accept()`` (4401 on failure); the agent sends
 vm_id/token as request headers (kept out of access logs), with the browser-style
 ``?vm_id=&token=`` query still accepted for the manual path.
 
-Dispatching a command (``POST /orchestrator/{vm_id}/command``) is capability-gated
+Dispatching a command (``POST /executor/{vm_id}/command``) is capability-gated
 *and* ownership-gated: a guest can only command an agent bound to a VM in its own
 namespace. The authenticated caller's role is forwarded in the frame; the agent
 re-checks it locally as a second, structural gate (see ``phonehome.rs``).
@@ -54,13 +54,13 @@ from app.core.jobs import transport
 from app.core.jobs.models import DoneMsg, ErrorMsg, JobStatus, ProgressMsg, QueuedMsg
 from app.routers.ws import send_json_or_disconnect
 
-router = APIRouter(prefix="/orchestrator", tags=["orchestrator"])
+router = APIRouter(prefix="/executor", tags=["executor"])
 logger = logging.getLogger(__name__)
 
-# Mirrors pki-orchestrator's `authz::Role::capabilities()` / command handlers
+# Mirrors pki-executor's `authz::Role::capabilities()` / command handlers
 # (`commands/*.rs`) — there is no automated sync between the two languages,
 # but both sides assert against byte-identical catalog fixtures
-# (``tests/fixtures/command_catalog.json`` here and in pki-orchestrator), so
+# (``tests/fixtures/command_catalog.json`` here and in pki-executor), so
 # adding a command on one side without the other fails a test instead of
 # surfacing as a 422 on dispatch.
 _COMMAND_CAPABILITIES: dict[str, Capability] = {
@@ -122,7 +122,7 @@ class RegisterResponse(BaseModel):
 def register() -> RegisterResponse:
     """Mint an in-process vm_id/token pair for the manual/dev flow.
 
-    A human copies both values into that agent's ``orchestrator.toml``. Real
+    A human copies both values into that agent's ``executor.toml``. Real
     deployed agents are provisioned automatically by the clone worker instead
     (persisted identity) — see the module docstring.
     """
@@ -142,9 +142,7 @@ async def dispatch_command(
     """Dispatch one command to a connected agent; stream progress over ws /api/ws/jobs/{job_id}."""
     required = _COMMAND_CAPABILITIES.get(req.command)
     if required is None:
-        raise HTTPException(
-            422, detail=f"Unknown orchestrator command '{req.command}'."
-        )
+        raise HTTPException(422, detail=f"Unknown executor command '{req.command}'.")
 
     role = user.role
     if required not in ROLE_CAPABILITIES[role]:
@@ -158,17 +156,17 @@ async def dispatch_command(
     # registry doc; the manual/dev path has none — allowed for operators only.
     doc = await vm_registry_col().find_one({"agent.vmId": vm_id})
     if doc is not None and doc.get("status") == "deleted":
-        raise HTTPException(404, detail=f"No orchestrator agent for vm_id '{vm_id}'.")
+        raise HTTPException(404, detail=f"No executor agent for vm_id '{vm_id}'.")
     vm_name = doc.get("vmName") if doc else None
     if vm_name is not None:
         enforce_guest_vm_ownership(vm_name, user)
     elif role == Role.GUEST:
-        raise HTTPException(404, detail=f"No orchestrator agent for vm_id '{vm_id}'.")
+        raise HTTPException(404, detail=f"No executor agent for vm_id '{vm_id}'.")
 
     agent = agents.resolve_agent(vm_id)
     if agent is None:
         raise HTTPException(
-            404, detail=f"No connected orchestrator agent for vm_id '{vm_id}'."
+            404, detail=f"No connected executor agent for vm_id '{vm_id}'."
         )
 
     job_id = uuid.uuid4().hex
@@ -221,19 +219,19 @@ async def _keepalive(vm_id: str, *, sleep=asyncio.sleep) -> None:
 
 @router.websocket("/connect")
 async def connect(websocket: WebSocket) -> None:
-    """Accept an orchestrator agent's phone-home connection, mark it live, and
+    """Accept an executor agent's phone-home connection, mark it live, and
     relay its progress frames onto the job transport.
 
-    vm_id/token come from the ``X-Orchestrator-Vm-Id``/``X-Orchestrator-Token``
+    vm_id/token come from the ``X-Executor-Vm-Id``/``X-Executor-Token``
     headers (the agent's path) or ``?vm_id=&token=`` (manual/dev). Auth is
     validated before ``accept()`` (4401 on failure). Provisioning is no longer
     kicked off here — the Celery plan runner drives every command through the
     ``agent-dispatch`` bridge.
     """
-    vm_id = websocket.headers.get("x-orchestrator-vm-id") or websocket.query_params.get(
+    vm_id = websocket.headers.get("x-executor-vm-id") or websocket.query_params.get(
         "vm_id"
     )
-    token = websocket.headers.get("x-orchestrator-token") or websocket.query_params.get(
+    token = websocket.headers.get("x-executor-token") or websocket.query_params.get(
         "token"
     )
     if not await _authenticate(vm_id, token):
@@ -284,9 +282,9 @@ async def connect(websocket: WebSocket) -> None:
 
 
 def _relay_progress(job_id: str, state: dict) -> None:
-    """Translate one orchestrator `OpRunState` frame onto the existing job transport.
+    """Translate one executor `OpRunState` frame onto the existing job transport.
 
-    `pending`/`cancelled` are never emitted by the orchestrator's own
+    `pending`/`cancelled` are never emitted by the executor's own
     `report.rs` helpers (only `running`/`done`/`error` are) — anything else
     is ignored rather than guessed at.
     """
@@ -330,7 +328,7 @@ def _relay_progress(job_id: str, state: dict) -> None:
         transport.publish(
             job_id,
             ErrorMsg(
-                status=500, detail=state.get("detail") or "orchestrator command failed"
+                status=500, detail=state.get("detail") or "executor command failed"
             ),
             status=JobStatus.error,
             terminal=True,

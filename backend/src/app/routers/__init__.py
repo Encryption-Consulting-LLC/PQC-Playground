@@ -16,7 +16,7 @@ from app.routers import (
     ip_pool,
     iso,
     meta,
-    orchestrator,
+    executor,
     project_shares,
     projects,
     settings,
@@ -41,7 +41,7 @@ for _router in (
     vm_registry.router,
     ip_pool.router,
     settings.router,
-    orchestrator.router,
+    executor.router,
     ws.router,
 ):
     api_router.include_router(_router)

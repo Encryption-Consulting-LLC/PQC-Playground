@@ -1,4 +1,4 @@
-"""Bundled orchestrator digest synchronization for saved settings."""
+"""Bundled executor digest synchronization for saved settings."""
 
 import os
 
