@@ -600,8 +600,8 @@ export function MachineNode({
             </span>
           ))}
         <AgentStatusDot
-          vmId={data.orchestratorVmId}
-          deployed={Boolean(data.vmName || data.orchestratorVmId)}
+          vmId={data.executorVmId}
+          deployed={Boolean(data.vmName || data.executorVmId)}
         />
       </div>
 

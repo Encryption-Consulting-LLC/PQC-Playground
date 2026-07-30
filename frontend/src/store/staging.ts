@@ -397,7 +397,7 @@ export function applyPlanState(
           // The agent identity rides on running pushes (partial result) so the
           // presence dot can appear while provisioning is still underway.
           ...(typeof runState.result?.agentVmId === "string"
-            ? { orchestratorVmId: runState.result.agentVmId }
+            ? { executorVmId: runState.result.agentVmId }
             : {}),
         })
       } else if (runState.status === "done") {
@@ -411,7 +411,7 @@ export function applyPlanState(
             ? { vmName: result.vmName }
             : {}),
           ...(typeof result?.agentVmId === "string"
-            ? { orchestratorVmId: result.agentVmId }
+            ? { executorVmId: result.agentVmId }
             : {}),
         }
         // Boot-settle alone doesn't make the node functional — its role
@@ -485,7 +485,7 @@ export function applyPlanState(
           phase: runState.phase,
           errorDetail: undefined,
           ...(typeof runState.result?.agentVmId === "string"
-            ? { orchestratorVmId: runState.result.agentVmId }
+            ? { executorVmId: runState.result.agentVmId }
             : {}),
         })
       } else if (runState.status === "done") {
@@ -517,7 +517,7 @@ export function applyPlanState(
             : {}),
           // Auto-provisioned orchestrator identity: the agent baked
           // into the ISO phones home under this vm_id; surfaces in the Inspector.
-          ...(agentVmId !== undefined ? { orchestratorVmId: agentVmId } : {}),
+          ...(agentVmId !== undefined ? { executorVmId: agentVmId } : {}),
         })
       } else if (runState.status === "error") {
         topology.patchNodeData(op.targetNodeId, {

@@ -130,7 +130,7 @@ export interface MachineData extends Record<string, unknown> {
    * at boot time (see `pki-orchestrator/README.md`) — so a human pastes it
    * in, standing in for what a real deployment will do automatically later.
    */
-  orchestratorVmId?: string
+  executorVmId?: string
   /** Redacted terminal verification projection used by the certificate journey lens. */
   certificateJourney?: CertificateJourney
   /** Redacted final multi-host verification used by heatmap and evidence modes. */

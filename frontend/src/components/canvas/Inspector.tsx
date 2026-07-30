@@ -304,7 +304,7 @@ function ConfigForm({
  *
  * A real deploy auto-correlates: the clone worker bakes the agent
  * into the ISO and its vm_id rides back on the createVm op result
- * (`orchestratorVmId`, set in `store/staging.ts`), and CA/DC provisioning is
+ * (`executorVmId`, set in `store/staging.ts`), and CA/DC provisioning is
  * dispatched by the backend the moment the agent phones home. The vm_id field
  * here stays editable as a manual override for the dev/register flow. Every
  * action shares the same end-to-end path `cert.verify` first proved
@@ -338,7 +338,7 @@ function OrchestratorPanel({
 
   function saveVmId() {
     const trimmed = draftVmId.trim()
-    store.patchNodeData(nodeId, { orchestratorVmId: trimmed || undefined })
+    store.patchNodeData(nodeId, { executorVmId: trimmed || undefined })
   }
 
   function run(command: string, params: Record<string, string>) {
@@ -1103,7 +1103,7 @@ export function Inspector() {
             </p>
             <OrchestratorPanel
               nodeId={nodeId}
-              vmId={data.orchestratorVmId}
+              vmId={data.executorVmId}
               templateId={data.typeId}
               canRead={canRead}
               canWrite={canUpdate}

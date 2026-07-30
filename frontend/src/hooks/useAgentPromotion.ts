@@ -32,8 +32,8 @@ export function useAgentPromotion(): void {
     for (const n of nodes) {
       if (
         n.data.lifecycle === LIFECYCLE.provisioning &&
-        n.data.orchestratorVmId &&
-        online.has(n.data.orchestratorVmId) &&
+        n.data.executorVmId &&
+        online.has(n.data.executorVmId) &&
         // Presence proves the VM booted, not that its role landed — while the
         // node's provision/realization ops are unresolved, the plan stream
         // (`applyPlanState`) owns the lifecycle.
