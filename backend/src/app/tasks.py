@@ -467,7 +467,7 @@ def _run_provision_op(
     has nothing to provision and converges to done immediately. Never opens an
     ESXi connection — that keeps the esxi queue's concurrency cap meaningful.
     An empty sequence (nothing to install — e.g. a member server) still waits
-    for phone-home — the op must never read ``done`` while the orchestrator
+    for phone-home — the op must never read ``done`` while the executor
     has yet to connect, and later cross-node ops assume every clone in the
     plan has a live agent. A provisioning failure fails the op (dependents
     cancel) but leaves the booted VM registered and teardownable."""
@@ -541,8 +541,8 @@ def _run_provision_op(
         return True
     if vm_id is None:
         for step_id, phase in (
-            ("agent-ready", "No orchestrator agent required"),
-            ("boot-settle", "No orchestrator boot wait required"),
+            ("agent-ready", "No executor agent required"),
+            ("boot-settle", "No executor boot wait required"),
         ):
             _set_visible_step(
                 state, op.id, step_id, "done", push, percent=100.0, phase=phase
@@ -550,7 +550,7 @@ def _run_provision_op(
         state[op.id] = OpRunState(
             status="done",
             percent=100.0,
-            phase="No orchestrator agent required",
+            phase="No executor agent required",
             result={"vmName": vm_name, **({"ip": ip} if ip else {})},
             steps=state[op.id].steps,
         )
@@ -839,7 +839,7 @@ def _run_clone_op(
         # on the worker host — an operator config error, not a per-VM one.
         if bundling and not Path(settings.executor_agent_path).is_file():
             detail = (
-                "Orchestrator agent binary not found on the worker host "
+                "Executor agent binary not found on the worker host "
                 "(EXECUTOR_AGENT_PATH)."
             )
             state[op.id] = OpRunState(
@@ -997,7 +997,7 @@ def _run_clone_op(
             # ip/vmName ride the op result so the frontend can label the node
             # and key teardown off the real inventory name. Authored clones
             # have no pool ip to report. agentVmId lets the Inspector
-            # surface the auto-provisioned orchestrator identity.
+            # surface the auto-provisioned executor identity.
             result={
                 **asdict(result),
                 "vmName": vm_name,

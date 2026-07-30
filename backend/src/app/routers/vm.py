@@ -236,7 +236,7 @@ async def delete_vm(
         )
     enforce_guest_vm_ownership(name, user)
 
-    # Force-close any live orchestrator agent for this VM before teardown, so it
+    # Force-close any live executor agent for this VM before teardown, so it
     # can't keep receiving commands while being destroyed. Best-effort: the
     # worker also revokes the identity (agent unset + registry deleted). Runs in
     # this API process, which is where the agent socket lives.

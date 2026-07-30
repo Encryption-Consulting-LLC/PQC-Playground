@@ -1,10 +1,10 @@
-"""Orchestrator agent correlation — identity and the live connection map.
+"""Executor agent correlation — identity and the live connection map.
 
 Two identity sources, both feeding the same auth check on ``ws /connect``:
 
 * **In-process pending** (``_pending``): a vm_id/token pair minted by
-  ``POST /orchestrator/register`` for the manual/dev flow (a human pastes them
-  into a local ``orchestrator.toml``). No persistence, lost on restart.
+  ``POST /executor/register`` for the manual/dev flow (a human pastes them
+  into a local ``executor.toml``). No persistence, lost on restart.
 * **Persisted**: the Celery clone worker mints an identity and stores
   ``{vmId, tokenHash, …}`` on the VM's ``vm_registry`` document, so a
   real deployed agent authenticates against Mongo (``authenticate_persisted``).
@@ -19,7 +19,7 @@ in a different request's coroutine than the one that accepted the connection.
 
 Presence: every mutation of ``_connected`` signals the in-process subscriber
 queues (``subscribe_presence``), which is what drives the frontend's live
-agent-online indicator (``ws /orchestrator/agents/watch``) — same
+agent-online indicator (``ws /executor/agents/watch``) — same
 single-API-process constraint as the map itself.
 """
 

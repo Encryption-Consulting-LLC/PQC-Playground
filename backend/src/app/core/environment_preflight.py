@@ -71,7 +71,7 @@ def _agent_binary_check(
             EnvironmentCheck(
                 key="agentBinary",
                 ok=False,
-                detail=f"Could not hash the bundled orchestrator agent: {exc}",
+                detail=f"Could not hash the bundled executor agent: {exc}",
             ),
             None,
         )
@@ -161,7 +161,7 @@ def preflight_control_plane(
         )
 
     # The agent phones home to the *effective* agent URL (AGENT_BACKEND_URL when
-    # set, else BACKEND_PUBLIC_URL) — that's what's baked into orchestrator.toml.
+    # set, else BACKEND_PUBLIC_URL) — that's what's baked into executor.toml.
     callback = settings.effective_agent_backend_url or ""
     parsed = urlparse(callback)
     callback_ok = parsed.scheme in ("http", "https") and bool(parsed.netloc)
@@ -186,7 +186,7 @@ def preflight_control_plane(
         agent_check = EnvironmentCheck(
             key="agentBinary",
             ok=True,
-            detail="Windows orchestrator agent is not required for this Linux product-only plan.",
+            detail="Windows executor agent is not required for this Linux product-only plan.",
         )
         agent_digest = None
     checks.append(agent_check)

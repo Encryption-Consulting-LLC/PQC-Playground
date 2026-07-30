@@ -81,14 +81,14 @@ class Capability(str, Enum):
 #     arbitrary scripts as SYSTEM on first boot and bypass the guest IP pool —
 #     never a shared-playground surface. Gates the /iso routes and any
 #     createVm op carrying authored content (checked in validate_plan).
-#   VM_EXEC_ARBITRARY is reserved for the firstboot orchestrator (future phase).
+#   VM_EXEC_ARBITRARY is reserved for the firstboot executor (future phase).
 #   DEPLOY is guest-eligible: the plan runner only does what a guest can already
 #     trigger directly (clones) plus simulated stub ops.
 #   VM_DELETE is guest-eligible: self-service teardown is the point —
 #     safety comes from ``enforce_guest_vm_ownership`` (a guest can only delete
 #     inside its own name namespace), not from withholding the capability.
 #   VM_PROVISION is guest-eligible for the same reason: a guest
-#     provisioning its *own* throwaway CA/DC is the point; the orchestrator
+#     provisioning its *own* throwaway CA/DC is the point; the executor
 #     command route enforces per-VM ownership so it can't target another VM.
 #   PROJECT_* (Mongo project persistence) is operator-only: guests keep
 #     client-side (localStorage) persistence, so the shared guest deploy never

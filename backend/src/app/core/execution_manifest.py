@@ -236,7 +236,7 @@ def build_execution_groups(
                 steps = [
                     {
                         "id": "agent-ready",
-                        "label": "Wait for orchestrator agent",
+                        "label": "Wait for executor agent",
                         "kind": "wait",
                         "dependsOn": [],
                     },

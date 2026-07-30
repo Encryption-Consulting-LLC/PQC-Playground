@@ -3,7 +3,7 @@
 The frontend spreads a node's ``config`` map flat into a ``createVm`` op's
 ``params`` (``store/staging.ts::buildOpPayload``). Those values (CA algorithm,
 key length, common name, …) are what the backend later dispatches to the
-orchestrator as command params once the agent phones home. This module is the
+executor as command params once the agent phones home. This module is the
 **authoritative** validator for them — the client map is never trusted:
 
 * ``validate_template_config`` rejects (422) any unknown config key (the
@@ -56,7 +56,7 @@ def password_policy_errors(value: str, vm_name: str = "") -> list[str]:
 
 
 # Free-text value shapes. Deliberately strict: these values are later
-# interpolated by orchestrator PowerShell (via param() blocks), so quotes,
+# interpolated by executor PowerShell (via param() blocks), so quotes,
 # semicolons, backticks and `$` are excluded even though the param-block layer
 # already neutralizes them — defence in depth.
 _DNS = re.compile(
@@ -107,7 +107,7 @@ def _int_between(lo: int, hi: int) -> Callable[[str], bool]:
 class FieldSpec:
     validate: Callable[[str], bool]
     default: str
-    #: Whether this field is dispatched to the orchestrator. Display-only fields
+    #: Whether this field is dispatched to the executor. Display-only fields
     #: (e.g. the CA ``keyLengthFixed`` label) are accepted but never provisioned.
     provision: bool = True
     #: A secret (password): validated against the AD-complexity policy rather

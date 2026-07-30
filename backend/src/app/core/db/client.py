@@ -282,7 +282,7 @@ def _profiles_with_agent_hash(
 async def _sync_saved_agent_hash() -> None:
     """Keep saved canary qualifications aligned with the bundled agent file.
 
-    Development rebuilds replace ``backend/agent/pki-orchestrator.exe``. On the
+    Development rebuilds replace ``backend/agent/pki-executor.exe``. On the
     next backend startup this backfills the deploy-time digest into every
     existing role qualification, avoiding manual per-role edits in Settings.
     It does not fabricate missing qualifications because image revision,

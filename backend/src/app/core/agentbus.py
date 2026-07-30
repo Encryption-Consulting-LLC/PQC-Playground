@@ -2,7 +2,7 @@
 
 Plan execution runs in the Celery worker (blocking hour-scale vmkit clones
 plus IP-pool idempotency belong there, not in the API process), but the
-orchestrator agent WebSockets live in the **FastAPI** process
+executor agent WebSockets live in the **FastAPI** process
 (:mod:`app.core.agents`). The worker therefore can't send an agent a command
 directly. This module is the relay across the two processes, over the same
 Valkey used for job transport:
@@ -201,7 +201,7 @@ def _frame_outcome(frame: dict) -> tuple[bool, dict] | None:
     if kind == "done":
         return True, frame.get("result") or {}
     if kind == "error":
-        return False, {"detail": frame.get("detail") or "orchestrator command failed"}
+        return False, {"detail": frame.get("detail") or "executor command failed"}
     return None
 
 
@@ -215,7 +215,7 @@ def _terminal_result(snapshot: dict) -> dict | None:
     ok, payload = outcome
     if ok:
         return payload
-    raise DispatchError(payload.get("detail", "orchestrator command failed"))
+    raise DispatchError(payload.get("detail", "executor command failed"))
 
 
 def wait_for_agent(
