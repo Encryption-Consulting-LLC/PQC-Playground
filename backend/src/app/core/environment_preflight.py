@@ -42,13 +42,13 @@ def _agent_binary_check(
     same message, which left an operator with no way to tell what to repair.
     """
 
-    configured_path = settings.orchestrator_agent_path
+    configured_path = settings.executor_agent_path
     if not configured_path:
         return (
             EnvironmentCheck(
                 key="agentBinary",
                 ok=False,
-                detail="ORCHESTRATOR_AGENT_PATH is not configured on the API host.",
+                detail="EXECUTOR_AGENT_PATH is not configured on the API host.",
             ),
             None,
         )
@@ -59,7 +59,7 @@ def _agent_binary_check(
             EnvironmentCheck(
                 key="agentBinary",
                 ok=False,
-                detail="ORCHESTRATOR_AGENT_PATH does not point to a readable file on the API host.",
+                detail="EXECUTOR_AGENT_PATH does not point to a readable file on the API host.",
             ),
             None,
         )

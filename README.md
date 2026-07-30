@@ -159,7 +159,7 @@ Open <http://localhost:5432>. Vite proxies `/api` HTTP and WebSocket traffic to
    and the four Windows role profiles.
 3. Qualify each golden image and run the environment/infrastructure preflights.
 4. Place the agent at `backend/agent/pki-orchestrator.exe` or set
-   `ORCHESTRATOR_AGENT_PATH` to a path readable by both API and worker hosts.
+   `EXECUTOR_AGENT_PATH` to a path readable by both API and worker hosts.
 5. Set `BACKEND_PUBLIC_URL` to the origin deployed guests use to reach the API.
    The agent connects at `/api/orchestrator/connect`; the URL must therefore be
    reachable from the ESXi guest network and support WebSocket upgrades.

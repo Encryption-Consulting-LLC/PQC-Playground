@@ -805,7 +805,7 @@ def _run_clone_op(
     iso_id = op.params.get("isoId")
     authored = bool(op.files) or bool(iso_id)
     bundling = (
-        settings.orchestrator_bundling_enabled
+        settings.executor_bundling_enabled
         and not authored
         and template not in LINUX_PRODUCT_TEMPLATES
     )
@@ -837,10 +837,10 @@ def _run_clone_op(
             return False
         # Fail cleanly BEFORE claiming an address if the agent binary is missing
         # on the worker host — an operator config error, not a per-VM one.
-        if bundling and not Path(settings.orchestrator_agent_path).is_file():
+        if bundling and not Path(settings.executor_agent_path).is_file():
             detail = (
                 "Orchestrator agent binary not found on the worker host "
-                "(ORCHESTRATOR_AGENT_PATH)."
+                "(EXECUTOR_AGENT_PATH)."
             )
             state[op.id] = OpRunState(
                 status="error",
@@ -914,7 +914,7 @@ def _run_clone_op(
                         },
                     )
                     agent_bundle = AgentBundle(
-                        binary_path=Path(settings.orchestrator_agent_path),
+                        binary_path=Path(settings.executor_agent_path),
                         config_toml=render_executor_config(
                             ExecutorAgentConfig(
                                 vm_id=vm_id,

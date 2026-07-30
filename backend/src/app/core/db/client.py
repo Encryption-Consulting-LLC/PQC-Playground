@@ -289,9 +289,9 @@ async def _sync_saved_agent_hash() -> None:
     command, ML-DSA, and OCSP canaries still have to come from the image test.
     """
 
-    if not settings.orchestrator_agent_path:
+    if not settings.executor_agent_path:
         return
-    path = Path(settings.orchestrator_agent_path)
+    path = Path(settings.executor_agent_path)
     if not path.is_file():
         return
     try:

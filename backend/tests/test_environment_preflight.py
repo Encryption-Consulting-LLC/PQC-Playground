@@ -40,7 +40,7 @@ def test_control_plane_requires_callback_agent_broker_and_worker(monkeypatch, tm
             ],
             publicationManifestVersion=1,
         )
-    monkeypatch.setattr(subject.settings, "orchestrator_agent_path", str(agent))
+    monkeypatch.setattr(subject.settings, "executor_agent_path", str(agent))
     monkeypatch.setattr(subject.settings, "backend_public_url", "https://pki.example")
     monkeypatch.setattr(subject.transport._client, "ping", lambda: True)
     monkeypatch.setattr(
@@ -66,7 +66,7 @@ def test_control_plane_requires_callback_agent_broker_and_worker(monkeypatch, tm
 
 def test_control_plane_reports_every_missing_prerequisite(monkeypatch):
     profiles = infrastructure_profiles_from_doc({})
-    monkeypatch.setattr(subject.settings, "orchestrator_agent_path", None)
+    monkeypatch.setattr(subject.settings, "executor_agent_path", None)
     monkeypatch.setattr(subject.settings, "backend_public_url", None)
     monkeypatch.setattr(subject.transport._client, "ping", lambda: False)
     monkeypatch.setattr(
@@ -81,7 +81,7 @@ def test_control_plane_reports_every_missing_prerequisite(monkeypatch):
     assert result.agent_sha256 is None
     assert all(not check.ok for check in result.checks)
     agent = next(check for check in result.checks if check.key == "agentBinary")
-    assert agent.detail == "ORCHESTRATOR_AGENT_PATH is not configured on the API host."
+    assert agent.detail == "EXECUTOR_AGENT_PATH is not configured on the API host."
 
 
 def test_control_plane_reports_actual_digest_and_mismatched_roles(
@@ -104,7 +104,7 @@ def test_control_plane_reports_actual_digest_and_mismatched_roles(
             windowsUpdatesCurrent=True,
             backendCallbackReachable=True,
         )
-    monkeypatch.setattr(subject.settings, "orchestrator_agent_path", str(agent))
+    monkeypatch.setattr(subject.settings, "executor_agent_path", str(agent))
     monkeypatch.setattr(subject.settings, "backend_public_url", "https://pki.example")
     monkeypatch.setattr(subject.transport._client, "ping", lambda: True)
 

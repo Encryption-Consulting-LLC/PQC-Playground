@@ -112,25 +112,25 @@ class Settings(BaseSettings):
     mongo_url: str = "mongodb://localhost:27017"
     mongo_db: str = "pki_playground"
 
-    # Orchestrator agent bundling. Both must be set to enable it (a
+    # Executor agent bundling. Both must be set to enable it (a
     # deploy-environment toggle, so env vars like the broker/Mongo config, not
     # the org-wide settings document):
-    #   ``ORCHESTRATOR_AGENT_PATH`` — filesystem path on both the API and worker
-    #     hosts to the same pki-orchestrator agent binary embedded into each
+    #   ``EXECUTOR_AGENT_PATH`` — filesystem path on both the API and worker
+    #     hosts to the same pki-executor agent binary embedded into each
     #     firstboot ISO. The API hashes it during preflight; the worker bundles it.
     #   ``BACKEND_PUBLIC_URL`` — the browser-facing origin (``http(s)://host:port``);
-    #     also the *default* target baked into the agent's orchestrator.toml.
-    # If ORCHESTRATOR_AGENT_PATH is unset, the backend uses the repo-bundled
-    # backend/agent/pki-orchestrator.exe when present. If no bundled binary is
+    #     also the *default* target baked into the agent's executor.toml.
+    # If EXECUTOR_AGENT_PATH is unset, the backend uses the repo-bundled
+    # backend/agent/pki-executor.exe when present. If no bundled binary is
     # present, the default firstboot ISO carries no agent, so it is safe on
     # golden images whose runner predates the v2 manifest. Per-template
     # provisioning config is NOT baked here — it lives on
     # the VM registry and is dispatched after the agent phones home.
-    orchestrator_agent_path: str | None = bundled_executor_agent_path()
+    executor_agent_path: str | None = bundled_executor_agent_path()
     backend_public_url: str | None = None
 
     # ``AGENT_BACKEND_URL`` — optional override for the origin baked into the
-    # agent's orchestrator.toml (the phone-home target), decoupling it from the
+    # agent's executor.toml (the phone-home target), decoupling it from the
     # browser-facing ``BACKEND_PUBLIC_URL``. Guest VMs share the backend's LAN,
     # so pointing agents straight at the LAN backend avoids routing phone-home
     # out to the public (Cloudflare-fronted) FQDN and back — see the phone-home
@@ -161,12 +161,12 @@ class Settings(BaseSettings):
     agent_boot_force_reboot_uptime_s: int = 600
 
     @property
-    def orchestrator_bundling_enabled(self) -> bool:
-        return bool(self.orchestrator_agent_path and self.backend_public_url)
+    def executor_bundling_enabled(self) -> bool:
+        return bool(self.executor_agent_path and self.backend_public_url)
 
     @property
     def effective_agent_backend_url(self) -> str | None:
-        """The origin baked into the agent's orchestrator.toml — the explicit
+        """The origin baked into the agent's executor.toml — the explicit
         ``AGENT_BACKEND_URL`` override when set, else ``BACKEND_PUBLIC_URL``."""
         return self.agent_backend_url or self.backend_public_url
 
