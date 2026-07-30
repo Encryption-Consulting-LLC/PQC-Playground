@@ -232,10 +232,10 @@ function LifecycleBadge({
 }
 
 /**
- * Orchestrator status across the node's whole lifecycle: grey before a real
+ * Executor status across the node's whole lifecycle: grey before a real
  * VM exists, then green/red from the live agent-presence feed. `vmName` is the
  * durable signal that deployment produced a VM, including authored-ISO VMs
- * that do not have an orchestrator identity to query.
+ * that do not have an executor identity to query.
  */
 function AgentStatusDot({
   vmId,
@@ -248,8 +248,8 @@ function AgentStatusDot({
   const title = !deployed
     ? "Not yet deployed"
     : connected
-      ? "Orchestrator connected"
-      : "Orchestrator offline"
+      ? "Executor connected"
+      : "Executor offline"
   return (
     <span
       title={title}

@@ -300,7 +300,7 @@ function ConfigForm({
 }
 
 /**
- * Agent correlation + the live orchestrator actions.
+ * Agent correlation + the live executor actions.
  *
  * A real deploy auto-correlates: the clone worker bakes the agent
  * into the ISO and its vm_id rides back on the createVm op result
@@ -311,7 +311,7 @@ function ConfigForm({
  * (dispatch -> job socket -> result): the guest-eligible reads (`hostname.read`,
  * `ip.read`, `cert.verify`) plus the operator-only `ip.write` form.
  */
-function OrchestratorPanel({
+function ExecutorPanel({
   nodeId,
   vmId,
   templateId,
@@ -570,7 +570,7 @@ export function Inspector() {
   const Icon = def?.icon ?? Settings
   const isConfigured = isDeployed(data)
   const isConfiguring = data.lifecycle === LIFECYCLE.deploying
-  // Clone finished, but the orchestrator agent hasn't phoned home — a real VM
+  // Clone finished, but the executor agent hasn't phoned home — a real VM
   // exists, so it's past configuring/staging, but not yet a confirmed deploy.
   const isProvisioning = data.lifecycle === LIFECYCLE.provisioning
   const isStaged = data.lifecycle === LIFECYCLE.staged
@@ -696,7 +696,7 @@ export function Inspector() {
             )}
             {/* Offline root: present as air-gapped — the management IP is real
                 (it phones home) but hidden here; operators see it in the
-                Orchestrator panel. Everyone else just sees the sneakernet
+                Executor panel. Everyone else just sees the sneakernet
                 fiction. */}
             {tier === "root" ? (
               <>
@@ -759,7 +759,7 @@ export function Inspector() {
                   {isProvisioning && (
                     <>
                       <Loader2 className="h-3 w-3 animate-spin text-emerald-500" />{" "}
-                      awaiting orchestrator…
+                      awaiting executor…
                     </>
                   )}
                   {isFailed && (
@@ -942,13 +942,13 @@ export function Inspector() {
           </section>
         )}
 
-        {/* Provisioning — the clone finished but the orchestrator agent hasn't
+        {/* Provisioning — the clone finished but the executor agent hasn't
             phoned home; the deploy isn't confirmed (IP/domain circle held back)
             until it does. */}
         {isProvisioning && (
           <section className="flex items-start gap-2 rounded-md border border-emerald-500/30 bg-emerald-500/5 p-2 text-xs text-emerald-600">
             <Loader2 className="mt-0.5 h-3 w-3 shrink-0 animate-spin" />
-            VM created — waiting for the orchestrator to phone home.
+            VM created — waiting for the executor to phone home.
           </section>
         )}
 
@@ -1093,15 +1093,15 @@ export function Inspector() {
           </section>
         )}
 
-        {/* Orchestrator phone-home: manual agent correlation + live hostname/IP/cert
+        {/* Executor phone-home: manual agent correlation + live hostname/IP/cert
             actions. Operator-only — raw vm_id/token correlation and agent commands
             are infra internals the guest product surface must not expose. */}
         {isOperator && (isConfigured || isProvisioning) && (
           <section className="flex flex-col gap-2 border-t pt-3">
             <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
-              Orchestrator
+              Executor
             </p>
-            <OrchestratorPanel
+            <ExecutorPanel
               nodeId={nodeId}
               vmId={data.executorVmId}
               templateId={data.typeId}

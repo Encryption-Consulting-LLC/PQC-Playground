@@ -515,7 +515,7 @@ export function applyPlanState(
           ...(typeof result?.vmName === "string"
             ? { vmName: result.vmName }
             : {}),
-          // Auto-provisioned orchestrator identity: the agent baked
+          // Auto-provisioned executor identity: the agent baked
           // into the ISO phones home under this vm_id; surfaces in the Inspector.
           ...(agentVmId !== undefined ? { executorVmId: agentVmId } : {}),
         })

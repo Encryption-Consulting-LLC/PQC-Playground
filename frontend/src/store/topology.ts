@@ -123,11 +123,11 @@ export interface MachineData extends Record<string, unknown> {
    */
   teardownJobId?: string
   /**
-   * vm_id of an orchestrator agent this node is manually associated with,
-   * from `POST /orchestrator/register` (see `Inspector.tsx`'s Orchestrator
+   * vm_id of an executor agent this node is manually associated with,
+   * from `POST /executor/register` (see `Inspector.tsx`'s Executor
    * section). There is no automatic VM<->agent correlation yet — vmkit has
    * no guest-correlation mechanism and isokit/configgen can't bake this in
-   * at boot time (see `pki-orchestrator/README.md`) — so a human pastes it
+   * at boot time (see `pki-executor/README.md`) — so a human pastes it
    * in, standing in for what a real deployment will do automatically later.
    */
   executorVmId?: string
@@ -358,7 +358,7 @@ interface TopologyState {
   /** Merges a partial data patch into one node — the seam the staging store's undo/cascade reverts go through. */
   patchNodeData: (id: string, data: Partial<MachineData>) => void
   /**
-   * Promotes a `provisioning` node to `deployed` — called when its orchestrator
+   * Promotes a `provisioning` node to `deployed` — called when its executor
    * agent first phones home (`useAgentPromotion`). This is the confirmation
    * that turns a dashed domain circle solid and reveals the node's IP. One-way:
    * a later agent drop doesn't demote (the live status dot tracks that).

@@ -18,7 +18,7 @@ import { useStagingStore } from "@/store/staging"
  * Rendered by App.tsx in the authenticated shell; auth gating is upstream.
  */
 export function Workspace() {
-  // Live orchestrator-agent presence for the whole workspace — one socket
+  // Live executor-agent presence for the whole workspace — one socket
   // feeding every node's online dot and the Inspector's "Agent: Connected"
   // row. Keyed to the session token so a re-login reattaches with fresh auth.
   const token = useAuthStore((s) => s.token)

@@ -1,5 +1,5 @@
 /**
- * Bridges live orchestrator presence (`store/agents.ts`) to node lifecycle:
+ * Bridges live executor presence (`store/agents.ts`) to node lifecycle:
  * the moment a node's baked agent first phones home, the node is promoted from
  * `provisioning` to `deployed` — the confirmation that turns its dashed domain
  * circle solid and reveals its IP.
