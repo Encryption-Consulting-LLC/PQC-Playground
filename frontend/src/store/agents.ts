@@ -1,6 +1,6 @@
 /**
- * Live orchestrator-agent presence — which vm_ids currently have a connected
- * agent, pushed over `ws /api/orchestrator/agents/watch` (see `lib/ws.ts`).
+ * Live executor-agent presence — which vm_ids currently have a connected
+ * agent, pushed over `ws /api/executor/agents/watch` (see `lib/ws.ts`).
  *
  * One socket per authenticated workspace: `Workspace` calls
  * `attachAgentsSocket` on mount and the returned detach on unmount. The
@@ -16,7 +16,7 @@ import { create } from "zustand"
 import { openAgentsSocket } from "@/lib/ws"
 
 interface AgentsState {
-  /** vm_ids with a currently-connected orchestrator agent. */
+  /** vm_ids with a currently-connected executor agent. */
   onlineVmIds: string[]
   /** Whether the presence socket itself is live — false means `onlineVmIds` may be stale. */
   watching: boolean

@@ -45,7 +45,7 @@ import { CAPABILITIES } from "@/constants/auth"
 import { useCan } from "@/hooks/useCan"
 import { useIsOperator } from "@/hooks/useIsOperator"
 import { useAgentConnected } from "@/hooks/useAgentConnected"
-import { dispatchOrchestratorCommand } from "@/lib/api"
+import { dispatchExecutorCommand } from "@/lib/api"
 import { openJobSocket } from "@/lib/ws"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -353,7 +353,7 @@ function OrchestratorPanel({
       setBusy(null)
       setResults((prev) => ({ ...prev, [command]: text }))
     }
-    dispatchOrchestratorCommand(vmId, command, params)
+    dispatchExecutorCommand(vmId, command, params)
       .then(({ job_id }) => {
         const token = useAuthStore.getState().token
         const close = openJobSocket(job_id, token, {

@@ -395,7 +395,7 @@ export const generatePassword = (req: PasswordRequest) =>
 
 // --- async jobs --------------------------------------------------------------
 
-/** Every 202-and-stream route (clone, deploy, teardown, orchestrator dispatch)
+/** Every 202-and-stream route (clone, deploy, teardown, executor dispatch)
  * returns this shape; progress streams over the job WS. */
 export interface JobAccepted {
   job_id: string
@@ -744,24 +744,24 @@ export const inspectProjectShare = (id: string) =>
 export const acceptProjectShare = (id: string) =>
   request<ProjectDoc>(URLS.projectShares.accept(id), { method: "POST" })
 
-// --- /orchestrator -----------------------------------------------------------
+// --- /executor -------------------------------------------------------------
 
 export interface RegisterAgentResponse {
   vm_id: string
   token: string
 }
 
-/** Mints a vm_id/token pair for a not-yet-connected orchestrator agent. */
+/** Mints a vm_id/token pair for a not-yet-connected executor agent. */
 export const registerAgent = () =>
-  request<RegisterAgentResponse>(URLS.orchestrator.register, { method: "POST" })
+  request<RegisterAgentResponse>(URLS.executor.register, { method: "POST" })
 
 /** Dispatch is async, same shape as clone/deploy: progress streams over the job WS. */
-export const dispatchOrchestratorCommand = (
+export const dispatchExecutorCommand = (
   vmId: string,
   command: string,
   params: Record<string, string> = {},
 ) =>
-  request<JobAccepted>(URLS.orchestrator.command(vmId), {
+  request<JobAccepted>(URLS.executor.command(vmId), {
     method: "POST",
     body: JSON.stringify({ command, params }),
   })

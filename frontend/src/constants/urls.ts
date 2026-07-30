@@ -56,17 +56,16 @@ export const URLS = {
     one: (id: string) => `/project-shares/${encodeURIComponent(id)}`,
     accept: (id: string) => `/project-shares/${encodeURIComponent(id)}/accept`,
   },
-  orchestrator: {
-    register: "/orchestrator/register",
-    command: (vmId: string) =>
-      `/orchestrator/${encodeURIComponent(vmId)}/command`,
-    agents: "/orchestrator/agents",
+  executor: {
+    register: "/executor/register",
+    command: (vmId: string) => `/executor/${encodeURIComponent(vmId)}/command`,
+    agents: "/executor/agents",
   },
   // WebSocket paths (relative to API_BASE, like the entries above). The ws
   // client resolves these against the current origin so the Vite proxy forwards
   // the upgrade in dev.
   ws: {
     jobs: (id: string) => `/ws/jobs/${encodeURIComponent(id)}`,
-    agents: "/orchestrator/agents/watch",
+    agents: "/executor/agents/watch",
   },
 } as const

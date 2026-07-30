@@ -151,14 +151,14 @@ export function openJobSocket(
   }
 }
 
-/** One agent-presence snapshot from `ws /api/orchestrator/agents/watch` — the full set of connected vm_ids, re-sent whole on every change. */
+/** One agent-presence snapshot from `ws /api/executor/agents/watch` — the full set of connected vm_ids, re-sent whole on every change. */
 export interface AgentsEvent {
   type: "agents"
   vm_ids: string[]
 }
 
 /**
- * Subscribe to live orchestrator-agent presence. `onAgents` fires with a full
+ * Subscribe to live executor-agent presence. `onAgents` fires with a full
  * snapshot on connect and again the moment any agent connects or disconnects;
  * `onClose` fires when the socket drops for any reason (the caller owns
  * reconnect policy). Returns a `close()` that detaches handlers silently.
