@@ -3,7 +3,7 @@
 EC PKI Playground is a browser-based lab for designing, deploying, and
 operating a Microsoft two-tier PKI on VMware ESXi. A React canvas compiles a
 topology into a dependency-aware deployment plan; FastAPI and Celery clone the
-machines, allocate addresses, drive the in-guest orchestrator, stream progress,
+machines, allocate addresses, drive the in-guest executor, stream progress,
 and retain recovery and verification evidence.
 
 ## Features
@@ -26,7 +26,7 @@ and retain recovery and verification evidence.
 
 The backend consumes `vmkit`, `configgen`, and `isokit` as versioned Git
 dependencies from [VM-Setup-Scripts](https://github.com/Arnesh-EC/VM-Setup-Scripts)
-rather than vendoring their source. The Windows `pki-orchestrator.exe` is also a
+rather than vendoring their source. The Windows `pki-executor.exe` is also a
 separately built deployment artifact and is intentionally not committed here.
 
 ## Architecture
@@ -45,7 +45,7 @@ Windows guest agents ──WebSocket───┘                  Celery workers
 | --- | --- |
 | `frontend/` | React 19, TypeScript, Vite, Tailwind, Zustand, TanStack Query, and XYFlow UI |
 | `backend/` | FastAPI API, Celery workers, Mongo persistence, topology compiler, and sequence engine |
-| `backend/agent/` | Agent configuration and optional local location for `pki-orchestrator.exe` |
+| `backend/agent/` | Agent configuration and optional local location for `pki-executor.exe` |
 | `docs/` | Feature inventory, roadmap, and real-lab verification notes |
 
 ## Prerequisites
@@ -56,7 +56,7 @@ Windows guest agents ──WebSocket───┘                  Celery workers
 - Valkey or Redis (job broker, result backend, progress bus, and agent dispatch)
 - For real deployments: a reachable VMware ESXi host, qualified Windows golden
   images, and an address range for cloned guests
-- For guided Windows provisioning: `pki-orchestrator.exe` and a backend URL the
+- For guided Windows provisioning: `pki-executor.exe` and a backend URL the
   guests can reach
 
 MongoDB is required for API startup. Valkey/Redis and the Celery workers are
@@ -158,10 +158,10 @@ Open <http://localhost:5432>. Vite proxies `/api` HTTP and WebSocket traffic to
 2. Configure the shared ESXi target, guest subnet, datastore/network placement,
    and the four Windows role profiles.
 3. Qualify each golden image and run the environment/infrastructure preflights.
-4. Place the agent at `backend/agent/pki-orchestrator.exe` or set
+4. Place the agent at `backend/agent/pki-executor.exe` or set
    `EXECUTOR_AGENT_PATH` to a path readable by both API and worker hosts.
 5. Set `BACKEND_PUBLIC_URL` to the origin deployed guests use to reach the API.
-   The agent connects at `/api/orchestrator/connect`; the URL must therefore be
+   The agent connects at `/api/executor/connect`; the URL must therefore be
    reachable from the ESXi guest network and support WebSocket upgrades.
 6. Create the preconfigured PKI project, review the compiler output, and deploy.
 
@@ -200,7 +200,7 @@ All application routes are mounted below `/api`.
 | Direct VM operations | `/api/vm/*`, `/api/vm-registry` |
 | Plans and recovery | `/api/deploy/compile`, `/api/deploy`, reconcile, teardown, cancel, and evidence routes |
 | ISO authoring | `/api/iso/*` |
-| Agents and progress | `/api/orchestrator/*`, `/api/ws/jobs/{job_id}` |
+| Agents and progress | `/api/executor/*`, `/api/ws/jobs/{job_id}` |
 
 FastAPI's generated OpenAPI document is the source of truth for request and
 response schemas. Except for liveness, login/OIDC entry points, and agent
