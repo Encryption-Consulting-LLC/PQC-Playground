@@ -12,7 +12,10 @@ redis, Mongo, or a real agent:
   is the step's stable id, used to derive the deterministic per-step job id
   (idempotency key on redelivery).
 * ``wait_for_reconnect(vm_id, since_ms, timeout_s)`` blocks until a connection
-  newer than ``since_ms`` is currently live, or raises.
+  newer than ``since_ms`` is currently live, or raises. It backs both a declared
+  reboot step and the one-shot recovery reboot a step can ask for when its
+  failure detail says the target has a restart pending
+  (``Step.reboot_recovery_signatures``).
 * ``sleep(seconds)`` / ``now_ms()`` are injected for deterministic tests.
 
 Resume: a ``completed`` set (from the ``plan_runs`` cursor) skips already-run
@@ -62,6 +65,21 @@ class SequenceCancelled(SequenceError):
 #: cap until ``verify_window_s`` elapses. ADWS / template propagation is slow,
 #: so the window (not this schedule) is the real bound.
 _VERIFY_BACKOFF = (5, 10, 15, 30, 45, 60)
+
+#: Reconnect budget for a recovery reboot (see
+#: :attr:`Step.reboot_recovery_signatures`) — matches the DC tail's declared
+#: reboot step, since it is the same restart of the same class of machine.
+_REBOOT_RECOVERY_RECONNECT_S = 1200
+
+
+def _reboot_recovery_signature(step: Step, exc: Exception) -> str | None:
+    """The first of ``step``'s pending-reboot signatures present in *exc*'s
+    detail, or ``None`` when the failure isn't one a restart would clear."""
+    detail = str(exc).lower()
+    return next(
+        (sig for sig in step.reboot_recovery_signatures if sig.lower() in detail),
+        None,
+    )
 
 
 class SequenceEngine:
@@ -200,9 +218,17 @@ class SequenceEngine:
     def _dispatch_with_retry(
         self, step: Step, vm_id: str, params: dict[str, str]
     ) -> dict:
-        """Dispatch a convergent step with its bounded transient retry policy."""
+        """Dispatch a convergent step with its bounded transient retry policy.
+
+        A failure whose detail matches ``step.reboot_recovery_signatures`` gets
+        one extra shot behind a reboot — the target refused the command only
+        because it has a restart pending, which no amount of redispatching on the
+        same boot can clear. That recovery is one-shot and independent of
+        ``retry_delays_s`` (which covers transient service failures).
+        """
 
         attempt = 0
+        recovered = False
         while True:
             job_key = step.id if attempt == 0 else f"{step.id}.retry.{attempt}"
             try:
@@ -216,7 +242,13 @@ class SequenceEngine:
                     timeout_s=step.timeout_s,
                     expect_disconnect=step.expects_disconnect,
                 )
-            except Exception:  # noqa: BLE001 - transport/agent transient boundary
+            except Exception as exc:  # noqa: BLE001 - transport/agent transient boundary
+                signature = _reboot_recovery_signature(step, exc)
+                if signature is not None and not recovered:
+                    recovered = True
+                    return self._reboot_and_redispatch(
+                        step, vm_id, params, signature, exc
+                    )
                 if attempt >= len(step.retry_delays_s):
                     raise
                 delay = step.retry_delays_s[attempt]
@@ -229,6 +261,58 @@ class SequenceEngine:
                     delay,
                 )
                 self._sleep(delay)
+
+    def _reboot_and_redispatch(
+        self,
+        step: Step,
+        vm_id: str,
+        params: dict[str, str],
+        signature: str,
+        original: Exception,
+    ) -> dict:
+        """Reboot ``vm_id`` to clear its pending restart, then redispatch *step*.
+
+        Raises the *original* failure (chained) when the reboot itself can't be
+        made to happen, so the surfaced detail still names the real blocker
+        rather than the recovery attempt.
+        """
+        logger.warning(
+            "sequence step %s (%s) reports a pending reboot (%r); rebooting %s "
+            "and redispatching once",
+            step.id,
+            step.command,
+            signature,
+            vm_id,
+        )
+        # Captured *before* dispatch for the same reason as a declared reboot
+        # step: a reboot that reconnects immediately must still read as "after".
+        since = self._now_ms()
+        try:
+            self._dispatch(
+                f"{step.id}.rebootrecover",
+                vm_id,
+                "system.reboot",
+                {"delaySeconds": "5"},
+                role=self._role,
+                secret_keys=(),
+                timeout_s=120,
+                expect_disconnect=True,
+            )
+            self._wait_for_reconnect(vm_id, since, _REBOOT_RECOVERY_RECONNECT_S)
+        except Exception as exc:
+            raise original from exc
+        # A fresh job key: the failed attempt's terminal snapshot must not
+        # short-circuit the redispatch.
+        return self._dispatch(
+            f"{step.id}.postreboot",
+            vm_id,
+            step.command,
+            params,
+            role=self._role,
+            secret_keys=step.secret_keys,
+            timeout_s=step.timeout_s,
+            expect_disconnect=step.expects_disconnect,
+        )
 
     def _run_verify(self, step: Step, vm_id: str, ctx: RunContext) -> None:
         probe = step.verify
