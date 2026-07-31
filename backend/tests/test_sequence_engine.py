@@ -748,3 +748,125 @@ def test_cancellation_stops_between_steps_without_interrupting_dispatch():
             _ctx(),
         )
     assert commands == ["dns.verify"]
+
+
+# The real detail from a failed forest promotion: Install-WindowsFeature left a
+# restart pending and Install-ADDSForest's prereq check refused in the same
+# session (FullyQualifiedErrorId Test.VerifyDcPromoCore.DCPromo.General.15).
+_PREREQ_DETAIL = (
+    "agent command 'dc.install_forest' failed: powershell execution failed: "
+    "script exited with code 1: Install-ADDSForest : Verification of "
+    "prerequisites for Domain Controller promotion failed. Role change is in "
+    "progress or this computer needs to be restarted."
+)
+
+
+def _forest_step(**overrides):
+    return Step(
+        id="install-forest",
+        command="dc.install_forest",
+        target="primary",
+        secret_keys=("safeModePassword",),
+        timeout_s=1800,
+        reboot_recovery_signatures=("dcpromo.general.15", "needs to be restarted"),
+        **overrides,
+    )
+
+
+def test_pending_reboot_failure_reboots_and_redispatches_once():
+    clock = FakeClock()
+    calls = []
+    reconnects = []
+
+    def dispatch(job_key, vm_id, command, params, **kwargs):
+        calls.append((job_key, command, params, kwargs["expect_disconnect"]))
+        if len(calls) == 1:
+            raise SequenceError(_PREREQ_DETAIL)
+        return {"promoted": command}
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *args: reconnects.append(args),
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+    result = engine.run([_forest_step()], _ctx())
+
+    assert result["install-forest"] == {"promoted": "dc.install_forest"}
+    assert [(key, command) for key, command, _p, _d in calls] == [
+        ("install-forest", "dc.install_forest"),
+        ("install-forest.rebootrecover", "system.reboot"),
+        ("install-forest.postreboot", "dc.install_forest"),
+    ]
+    # The reboot is a real disconnect-expecting restart, waited out on the
+    # recovery budget before the command is tried again.
+    assert calls[1][2] == {"delaySeconds": "5"}
+    assert calls[1][3] is True
+    assert reconnects == [("vm-1", 0, 1200)]
+
+
+def test_unrelated_failure_does_not_trigger_a_recovery_reboot():
+    clock = FakeClock()
+    commands = []
+
+    def dispatch(_key, _vm, command, *_args, **_kwargs):
+        commands.append(command)
+        raise SequenceError("safe mode password does not meet complexity rules")
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    with pytest.raises(SequenceError, match="complexity"):
+        engine.run([_forest_step()], _ctx())
+    assert commands == ["dc.install_forest"]
+
+
+def test_reboot_recovery_is_one_shot():
+    clock = FakeClock()
+    commands = []
+
+    def dispatch(_key, _vm, command, *_args, **_kwargs):
+        commands.append(command)
+        if command == "dc.install_forest":
+            raise SequenceError(_PREREQ_DETAIL)
+        return {"ok": True}
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    with pytest.raises(SequenceError, match="needs to be restarted"):
+        engine.run([_forest_step()], _ctx())
+    assert commands == ["dc.install_forest", "system.reboot", "dc.install_forest"]
+
+
+def test_failed_recovery_reboot_surfaces_the_original_failure():
+    clock = FakeClock()
+
+    def dispatch(_key, _vm, command, *_args, **_kwargs):
+        if command == "dc.install_forest":
+            raise SequenceError(_PREREQ_DETAIL)
+        return {"ok": True}
+
+    def wait_for_reconnect(*_args):
+        raise SequenceError("agent never came back")
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=wait_for_reconnect,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    # The blocker the operator needs to see is the prereq refusal, not the
+    # recovery attempt that also failed.
+    with pytest.raises(SequenceError, match="prerequisites") as excinfo:
+        engine.run([_forest_step()], _ctx())
+    assert "never came back" in str(excinfo.value.__cause__)

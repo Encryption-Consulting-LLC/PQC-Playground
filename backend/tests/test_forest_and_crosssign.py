@@ -39,6 +39,8 @@ def test_dc_provision_promotes_reboots_and_points_dns_at_self():
         "dns.set_client",
     ]
     assert "safeModePassword" in steps[0].secret_keys
+    # Promotion recovers from its own role install asking for a restart.
+    assert "dcpromo.general.15" in steps[0].reboot_recovery_signatures
     assert steps[1].expects_disconnect is True
     assert steps[1].verify is None
     assert steps[2].verify.command == "dc.verify"
