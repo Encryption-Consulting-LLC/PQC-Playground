@@ -107,6 +107,10 @@ def test_join_applies_and_verifies_planned_a_and_ptr_records():
 
 
 def test_join_params_use_domain_netbios_admin_and_secret_password():
+    # This credential only exists *in the guest* because the DC's firstboot
+    # 50-password.ps1 reset the local Administrator before Install-ADDSForest
+    # promoted it into the domain — the other half of the contract, pinned in
+    # test_firstboot_password.py.
     ctx = _ctx()
     join = op_sequence("domainJoin", ctx)[1]
     params = join.resolve_params(ctx)

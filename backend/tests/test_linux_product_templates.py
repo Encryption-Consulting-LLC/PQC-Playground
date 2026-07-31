@@ -73,6 +73,8 @@ def test_linux_firstboot_uses_shell_scripts(monkeypatch, tmp_path):
             dns1="192.0.2.2",
         ),
         dest_dir=tmp_path,
+        # A Windows-only Set-LocalUser step must never reach a Linux product VM.
+        admin_password="Str0ng-Lab-Pass!",
     )
 
     assert rendered[0] == ("linux", "guest-alice-project-certsecure01")
