@@ -16,9 +16,26 @@ runs as a visible executor step instead of blocking the connection.
 ``role_scripts_for`` remains the hook for a genuinely firstboot-only script (one
 that must run *before* the agent), but the shipping templates carry none.
 
-Numbering fixes manifest (execution) order: ``10-`` hostname, ``20-`` network.
+The one credential exception is ``admin_password`` (a domain controller's
+``domainAdminPassword``), which renders a ``Set-LocalUser`` step for the built-in
+local ``Administrator``. It cannot be an executor step: ``Install-ADDSForest``
+promotes the *local* Administrator into the new forest as the built-in **domain**
+Administrator, keeping its password, so the reset has to land *before* promotion
+— and the agent's command set has no way to set a password at all. That password
+is what every later ``domain.join`` and the issuing-CA install authenticate with
+as ``<NETBIOS>\\Administrator``.
+
+Numbering fixes manifest (execution) order: ``10-`` hostname, ``20-`` network,
+``40-`` agent install (bundled path only), ``50-`` local Administrator password
+(domain controllers only). isokit packs in the order received, so the list handed
+to it *is* the manifest order — the numeric names only document it.
 Scripts never reboot — the firstboot runner in the base image owns the single
 reboot (established configgen convention).
+
+The disc is not a secret store: it already ships the agent's bearer token in
+``executor.toml`` and now a domain controller's Administrator password as
+plaintext PowerShell, and vmkit leaves it attached at
+``[datastore] <vm>/<vm>-config.iso`` for the VM's lifetime.
 
 ``build_authored_iso`` packs an operator-authored script set verbatim via
 isokit's v2 API — the server injects nothing (no hostname/network render, no
@@ -51,6 +68,13 @@ _AGENT_INSTALL_SCRIPT = (
     / "_agent"
     / "40-install-executor.ps1"
 )
+#: The Windows built-in local administrator. ``Install-ADDSForest`` carries *this*
+#: account's password into the new forest as the built-in **domain** Administrator
+#: password — the credential every later step signs in with as
+#: ``<NETBIOS>\Administrator`` (``core.sequences.definitions._admin_username``).
+#: Hardcoded on purpose: the inheritance is specific to the builtin, so pointing
+#: this at another local account would silently produce an unjoinable domain.
+LOCAL_ADMIN_ACCOUNT = "Administrator"
 
 
 @dataclass(frozen=True)
@@ -136,6 +160,7 @@ def build_firstboot_iso(
     net: GuestNetwork,
     dest_dir: Path,
     agent: AgentBundle | None = None,
+    admin_password: str = "",
 ) -> Path:
     """Render + pack the per-VM config ISO into ``dest_dir``; returns its path.
 
@@ -146,6 +171,11 @@ def build_firstboot_iso(
     ``build_config_iso`` and additionally carries the agent binary + rendered
     ``executor.toml`` as payload files plus a static install step — so the
     booted VM installs and starts the phone-home agent.
+
+    A non-empty ``admin_password`` on a Windows template additionally renders
+    ``50-password.ps1``, resetting the guest's built-in local ``Administrator``
+    (see ``LOCAL_ADMIN_ACCOUNT``). Blank — every template but a domain
+    controller — renders nothing, as does any Linux template.
 
     Raises ``KeyError`` on an unknown template (routes validate against
     ``TEMPLATE_IDS`` first, so hitting it here is a programming error) and
@@ -188,10 +218,26 @@ def build_firstboot_iso(
     )
 
     scripts = [hostname_script, network_script, *role_scripts_for(template)]
+
+    # A domain controller's credential bootstrap. Kept out of ``scripts`` so both
+    # ISO paths can pack it *after* the agent install step: if this throws, the
+    # runner fails fast and never reboots (so the agent service never starts
+    # either way), but the binary and its service registration are already
+    # persisted — a power-cycle then yields a connected, diagnosable VM. Running
+    # it earlier would abort before the agent was even copied.
+    password_scripts: list[Path] = []
+    if admin_password and platform == "windows":
+        password_script = dest_dir / "50-password.ps1"
+        password_script.write_text(
+            configgen.render_password(platform, LOCAL_ADMIN_ACCOUNT, admin_password),
+            encoding="utf-8",
+        )
+        password_scripts.append(password_script)
+
     iso_path = dest_dir / f"{vm_name}-config.iso"
 
     if agent is None:
-        isokit.build_script_iso(scripts, iso_path)
+        isokit.build_script_iso([*scripts, *password_scripts], iso_path)
         return iso_path
 
     # v2: embed the agent binary + config as payload files and append
@@ -205,7 +251,7 @@ def build_firstboot_iso(
 
     isokit.build_config_iso(
         iso_path,
-        scripts=[*scripts, _AGENT_INSTALL_SCRIPT],
+        scripts=[*scripts, _AGENT_INSTALL_SCRIPT, *password_scripts],
         files=[binary_on_disc, config_path],
     )
     return iso_path
