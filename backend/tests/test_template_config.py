@@ -67,6 +67,38 @@ def test_validate_accepts_strong_dc_password():
     )
 
 
+def test_validate_requires_a_dc_password():
+    """An *omitted* key is invisible to the params loop, so it needs its own gate:
+    without one the DC promotes with an empty DSRM password and an unjoinable
+    domain, failing four sequence steps deep instead of here."""
+
+    with pytest.raises(ValueError, match="required"):
+        validate_template_config(
+            "domainController",
+            {"vmName": "dc01", "template": "domainController"},
+        )
+
+
+@pytest.mark.parametrize("value", ["", "   "])
+def test_validate_rejects_a_blank_dc_password(value):
+    with pytest.raises(ValueError, match="required"):
+        validate_template_config(
+            "domainController",
+            {
+                "vmName": "dc01",
+                "template": "domainController",
+                "domainAdminPassword": value,
+            },
+        )
+
+
+@pytest.mark.parametrize("template", ["certificateAuthority", "standalone", "cbom"])
+def test_validate_accepts_bare_params_for_templates_without_required_fields(template):
+    """Guards the required-field pass against over-firing: only the DC has one."""
+
+    validate_template_config(template, {"vmName": "vm01", "template": template})
+
+
 def test_validate_accepts_optional_ipv4_reverse_zone():
     validate_template_config(
         "domainController",

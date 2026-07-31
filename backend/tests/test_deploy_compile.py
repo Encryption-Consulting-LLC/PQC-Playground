@@ -178,6 +178,22 @@ def test_dry_run_returns_compiled_operations_and_estimates():
     )
 
 
+def test_dc_without_a_domain_admin_password_is_rejected():
+    """The password is the lab's single credential — firstboot resets the DC's local
+    Administrator to it and every later domain join signs in with it — so a DC op
+    that omits it must 422 here, not fail deep inside the sequence."""
+
+    request = _request()
+    dc_op = next(op for op in request.ops if op.id == "create-dc")
+    dc_op.params.pop("domainAdminPassword")
+
+    with pytest.raises(HTTPException) as caught:
+        asyncio.run(compile_deploy(request, _operator()))
+
+    assert caught.value.status_code == 422
+    assert "domainAdminPassword" in str(caught.value.detail)
+
+
 def test_compile_failure_returns_structured_diagnostics():
     request = _request()
     request.topology.edges = []
