@@ -1058,9 +1058,14 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
     steps: list[Step] = []
 
     # 1) Rehydrate a missing relay from the offline root's configured
-    #    publication directory, then trust the root on CA02.  The recovery
-    #    reads normally skip, but make retry/reconcile self-healing when an
-    #    older parallel worker erased plan artifacts after root provisioning.
+    #    publication directory, then trust the root on CA02 — *both* its cert
+    #    and its CRL. `certutil -installcert` (step 4) validates the whole
+    #    chain, so a missing local CRL fails it with CRYPT_E_REVOCATION_OFFLINE:
+    #    the offline root's CDP is an LDAP/HTTP location that nothing serves yet
+    #    at this point in the plan, and the chain engine has no other copy.
+    #    The recovery reads normally skip, but make retry/reconcile self-healing
+    #    when an older parallel worker erased plan artifacts after root
+    #    provisioning.
     steps += [
         Step(
             id="recover-root-crt",
@@ -1093,7 +1098,20 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
             id="addstore-root",
             command="cert.addstore",
             target=PRIMARY,
-            params={"store": "root", "path": _ROOT_CRT},
+            params={"store": "root", "path": _ROOT_CRT, "kind": "cert"},
+        ),
+        Step(
+            id="rootcrl-to-ca02",
+            command="file.write",
+            target=PRIMARY,
+            params={"path": _ROOT_CRL},
+            consumes=(_A_ROOT_CRL,),
+        ),
+        Step(
+            id="addstore-rootcrl",
+            command="cert.addstore",
+            target=PRIMARY,
+            params={"store": "ca", "path": _ROOT_CRL, "kind": "crl"},
         ),
     ]
 
