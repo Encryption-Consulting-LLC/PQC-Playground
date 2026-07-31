@@ -140,6 +140,10 @@ class Step:
     #: Delays before bounded redispatch attempts for transient service failures.
     #: Empty means one attempt. Mutating commands using this must be convergent.
     retry_delays_s: tuple[int, ...] = ()
+    #: Case-insensitive failure-detail substrings meaning "the target has a
+    #: reboot pending". Matching once buys a reboot plus one redispatch of this
+    #: same command, so the command must be convergent across a restart.
+    reboot_recovery_signatures: tuple[str, ...] = ()
 
     def resolve_params(self, ctx: RunContext) -> dict[str, str]:
         node = ctx.node(self.target)
