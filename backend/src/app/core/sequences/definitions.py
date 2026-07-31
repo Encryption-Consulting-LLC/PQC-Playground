@@ -62,6 +62,15 @@ _ENROLL_RETRY = (10, 20, 40, 60, 90)
 _CRL_RETRY = (10, 20, 40, 60)
 _OCSP_RETRY = (10, 20, 40, 60, 90)
 
+# ``Install-ADDSForest``'s prerequisite refusal when the box has a restart
+# pending — the locale-independent error id first, then the English message text
+# it ships with as a fallback.
+_DCPROMO_REBOOT_PENDING = (
+    "dcpromo.general.15",
+    "needs to be restarted",
+    "role change is in progress",
+)
+
 
 def _admin_username(netbios: str | None) -> str:
     return f"{netbios}\\Administrator" if netbios else "Administrator"
@@ -364,7 +373,14 @@ def _domain_controller_provision(*, include_dns: bool = False) -> list[Step]:
     NIC DNS at itself, then verify ADWS is up. DNS must precede the probe so
     legacy agents that use default DC discovery do not retain the cloned
     image's pre-promotion resolver settings. The `pki` CNAME is deferred to
-    the webServerCert op (it only resolves usefully once the web host exists)."""
+    the webServerCert op (it only resolves usefully once the web host exists).
+
+    ``dc.install_forest`` installs the AD DS role and promotes in one PowerShell
+    session, discarding ``Install-WindowsFeature``'s ``RestartNeeded`` — so a role
+    install (or any pending state inherited from firstboot) that wants a restart
+    makes the promotion's prerequisite check refuse. Rebooting and redispatching
+    clears it: the feature install is a no-op the second time and the promotion
+    then runs on a clean boot."""
 
     def forest_params(rt: StepRuntime) -> dict[str, str]:
         cfg = rt.node.template_config
@@ -383,6 +399,7 @@ def _domain_controller_provision(*, include_dns: bool = False) -> list[Step]:
             params=forest_params,
             secret_keys=("safeModePassword",),
             timeout_s=1800,
+            reboot_recovery_signatures=_DCPROMO_REBOOT_PENDING,
         ),
         Step(
             id="reboot",
