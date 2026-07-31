@@ -71,7 +71,11 @@ from app.core.infrastructure_preflight import (
 )
 from app.core.settings import settings
 from app.core.evidence import redact_evidence
-from app.core.template_config import encrypt_config_secrets, extract_template_config
+from app.core.template_config import (
+    DOMAIN_ADMIN_PASSWORD_KEY,
+    encrypt_config_secrets,
+    extract_template_config,
+)
 from app.core.jobs import transport
 from app.core.jobs.models import (
     DoneMsg,
@@ -877,6 +881,13 @@ def _run_clone_op(
                     dest_dir=Path(tmp),
                 )
             else:
+                # Plaintext (``extract_template_config`` never encrypts —
+                # ``encrypt_config_secrets`` does that on the way to Mongo).
+                # Resolved out here, not inside the mint branch below, because
+                # the DC's firstboot password script needs it on *every*
+                # firstboot path: bundling disabled, and redelivery over a
+                # survivor (where we deliberately never re-mint).
+                template_config = extract_template_config(template, op.params)
                 agent_bundle = None
                 # Mint + bake an agent only when bundling is on AND the VM does
                 # not already exist. A redelivery over a survivor (VmExists
@@ -887,7 +898,10 @@ def _run_clone_op(
                     vm_id, token = agents.mint_identity()
                     # Persist the identity + the config the backend will dispatch
                     # after phone-home. Written before the ISO is built; the
-                    # config never rides the ISO (backend-driven provisioning).
+                    # *provisioning* config never rides the ISO (backend-driven
+                    # provisioning). The DC's Administrator password is the one
+                    # deliberate exception — `Install-ADDSForest` can only inherit
+                    # it from the local account, so it has to be set at firstboot.
                     db["vm_registry"].update_one(
                         {"vmName": vm_name},
                         {
@@ -896,16 +910,13 @@ def _run_clone_op(
                                     "vmId": vm_id,
                                     "tokenHash": agents.hash_token(token),
                                     "role": owner_role,
-                                    "templateId": op.params["template"],
+                                    "templateId": template,
                                     # Secrets (the DC's domainAdminPassword) are
                                     # AES-GCM encrypted before they touch Mongo;
                                     # the dispatch path decrypts them just in
                                     # time (core.template_config).
                                     "templateConfig": encrypt_config_secrets(
-                                        op.params["template"],
-                                        extract_template_config(
-                                            op.params["template"], op.params
-                                        ),
+                                        template, template_config
                                     ),
                                     "provisionState": "pending",
                                     "mintedAt": now_ms(),
@@ -925,12 +936,17 @@ def _run_clone_op(
                         ),
                     )
                 iso = build_firstboot_iso(
-                    template=op.params["template"],
+                    template=template,
                     vm_name=vm_name,
                     ip=ip,
                     net=net,
                     dest_dir=Path(tmp),
                     agent=agent_bundle,
+                    # A domain controller only: the reset that makes this the
+                    # forest's domain Administrator password after promotion, and
+                    # so the credential every later domain join authenticates
+                    # with. Blank for every other template.
+                    admin_password=template_config.get(DOMAIN_ADMIN_PASSWORD_KEY, ""),
                 )
             req = CloneRequest(
                 name=vm_name,

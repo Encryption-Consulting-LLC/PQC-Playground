@@ -23,6 +23,13 @@ from dataclasses import dataclass
 #: Keys that always ride in a createVm op's params but are not template config.
 RESERVED_PARAM_KEYS = frozenset({"vmName", "template", "isoId"})
 
+#: The domain controller's operator-set credential. Dispatched as
+#: ``Install-ADDSForest``'s DSRM/``safeModePassword`` *and* rendered into the DC's
+#: firstboot ``50-password.ps1`` (``core.firstboot``) — the latter is what makes it
+#: the domain Administrator password once the forest is promoted, and therefore the
+#: credential ``domain.join`` and the issuing-CA install sign in with.
+DOMAIN_ADMIN_PASSWORD_KEY = "domainAdminPassword"
+
 #: AD-complexity policy for operator-set passwords (the DC's
 #: ``domainAdminPassword``). Mirrors ``frontend/src/lib/passwordPolicy.ts`` —
 #: this is the authoritative gate; the frontend checklist is a convenience.
@@ -136,9 +143,11 @@ TEMPLATE_CONFIG_FIELDS: dict[str, dict[str, FieldSpec]] = {
         # are planned; operators can use an existing external reverse-DNS setup.
         "reverseZone": FieldSpec(_reverse_zone, ""),
         # Operator-set; injected as a secret command param into domain joins and
-        # the issuing-CA install. ``validate`` is a placeholder — secrets go
-        # through ``password_policy_errors`` in ``validate_template_config``.
-        "domainAdminPassword": FieldSpec(lambda _v: True, "", secret=True),
+        # the issuing-CA install, and rendered into this DC's firstboot password
+        # script so that credential actually exists. ``validate`` is a
+        # placeholder — secrets go through ``password_policy_errors`` in
+        # ``validate_template_config``.
+        DOMAIN_ADMIN_PASSWORD_KEY: FieldSpec(lambda _v: True, "", secret=True),
     },
     "certificateAuthority": {
         "caType": FieldSpec(_one_of("Root", "Issuing"), "Root"),
