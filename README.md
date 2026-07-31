@@ -158,12 +158,24 @@ Open <http://localhost:5432>. Vite proxies `/api` HTTP and WebSocket traffic to
 2. Configure the shared ESXi target, guest subnet, datastore/network placement,
    and the four Windows role profiles.
 3. Qualify each golden image and run the environment/infrastructure preflights.
+   Each Windows image must keep its built-in `Administrator` account present,
+   enabled, and free of "user must change password at next logon" — first boot
+   resets that account's password with `Set-LocalUser`, which neither creates the
+   account nor clears that flag. A renamed, deleted, or must-change builtin makes
+   first boot fail, and a local password policy stricter than the console's own
+   (12 characters, 3 character classes) makes the reset throw.
 4. Place the agent at `backend/agent/pki-executor.exe` or set
    `EXECUTOR_AGENT_PATH` to a path readable by both API and worker hosts.
 5. Set `BACKEND_PUBLIC_URL` to the origin deployed guests use to reach the API.
    The agent connects at `/api/executor/connect`; the URL must therefore be
    reachable from the ESXi guest network and support WebSocket upgrades.
-6. Create the preconfigured PKI project, review the compiler output, and deploy.
+6. Set the domain controller node's **domain admin password** to something you
+   control. It is the lab's single Windows credential: the DC's first-boot ISO
+   resets the guest's built-in local `Administrator` to it, `Install-ADDSForest`
+   promotes that account into the domain, and every later domain join plus the
+   issuing-CA install then sign in as `<NETBIOS>\Administrator` with it.
+   Deploying a domain controller without one is rejected with a 422.
+7. Create the preconfigured PKI project, review the compiler output, and deploy.
 
 Environment values such as `ESXI_*`, `CLONE_*`, and `GUEST_*` only seed the
 Mongo settings document when values are absent. Once seeded, the operator-edited
