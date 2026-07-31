@@ -251,7 +251,7 @@ def test_caconnect_handshake_relays_root_csr_and_signed_cert():
     commands = [s.command for s in steps]
     # Root trusted on CA02, published to AD + web, issuing installed, CSR out /
     # signed cert back, config + templates + grant.
-    assert "cert.addstore" in commands
+    assert commands.count("cert.addstore") == 2  # root cert + root CRL
     assert commands.count("cert.dspublish") == 2  # root cert + root CRL
     assert "ca.sign_request" in commands
     assert "ca.install_cert" in commands
@@ -260,6 +260,36 @@ def test_caconnect_handshake_relays_root_csr_and_signed_cert():
     # The CSR/signed-cert relay uses produce/consume artifacts.
     produced = {a for s in steps for a in s.produces}
     assert {"issuing_csr", "issuing_crt"} <= produced
+
+
+def test_caconnect_trusts_the_root_crl_on_ca02_before_installing_the_cert():
+    """`certutil -installcert` chain-validates, and the offline root's CDP isn't
+    served yet — the CRL has to be in CA02's own CA store first."""
+
+    ctx = _full_lab_ctx()
+    steps = op_sequence("caConnect", ctx)
+    order = [s.id for s in steps]
+    by_id = {s.id: s for s in steps}
+
+    relay = by_id["rootcrl-to-ca02"]
+    assert relay.target == "primary"
+    assert relay.consumes == ("root_crl",)
+    assert relay.resolve_params(ctx)["path"] == "C:\\Transfer\\root-ca.crl"
+
+    trust = by_id["addstore-rootcrl"]
+    assert trust.target == "primary"
+    assert trust.resolve_params(ctx) == {
+        "store": "ca",
+        "path": "C:\\Transfer\\root-ca.crl",
+        "kind": "crl",
+    }
+    assert by_id["addstore-root"].resolve_params(ctx)["kind"] == "cert"
+
+    assert (
+        order.index("rootcrl-to-ca02")
+        < order.index("addstore-rootcrl")
+        < order.index("install-issuing-cert")
+    )
 
 
 def test_caconnect_recovers_missing_root_artifacts_from_configured_directory():
