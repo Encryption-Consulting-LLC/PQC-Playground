@@ -54,7 +54,11 @@ touch "$DEPLOY_ENV" && chmod 600 "$DEPLOY_ENV"
 # Non-sensitive knobs keep plain defaults (localhost / conventional names);
 # override any of them inline. Site-specific values are resolved via ensure_var
 # below (prompt-once, persist) rather than hardcoded here.
-API_HOST="${API_HOST:-127.0.0.1}"
+# Binds all interfaces, not just loopback: browser traffic arrives via the
+# reverse proxy, but guest VMs phone home to the backend *directly* over the LAN
+# (AGENT_BACKEND_URL — see core/settings.py), so a loopback-only listener makes
+# every agent connection fail. Set API_HOST=127.0.0.1 for a local-only deploy.
+API_HOST="${API_HOST:-0.0.0.0}"
 API_PORT="${API_PORT:-8000}"
 EXEC_RELEASE_TAG="${EXEC_RELEASE_TAG:-latest}"   # git tag, or "latest"
 EXEC_ASSET="${EXEC_ASSET:-pki-executor.exe}"     # asset filename on the release
@@ -435,13 +439,23 @@ log "Deploy complete. Status:"
 systemctl --user --no-pager --no-legend status "${SERVICES[@]}" \
   | sed -n '1,4p;/Active:/p' || true
 
+# $API_HOST is a bind address, not a reachable one (0.0.0.0 by default), so the
+# URLs below use this host's primary LAN address instead.
+if [[ "$API_HOST" == "0.0.0.0" || "$API_HOST" == "::" ]]; then
+  URL_HOST="$(hostname -I 2>/dev/null | awk '{print $1}')"
+  URL_HOST="${URL_HOST:-$(hostname)}"
+else
+  URL_HOST="$API_HOST"
+fi
+
 cat <<EOF
 
 Next steps:
-  - Admin console: $API_HOST:$API_PORT/admin
+  - Admin console: $URL_HOST:$API_PORT/admin
 ${ADMIN_NOTE}  - Bootstrap an operator or guest (interactive password prompt):
       cd $BACKEND && uv run create-admin <name> --role operator
   - Logs:   journalctl --user -u pki-api -f   (or -worker-esxi / -worker-provision)
   - Control: systemctl --user restart pki.target   |   systemctl --user stop pki.target
-  - API listening at: $API_HOST:$API_PORT  (SPA + /api + /admin same origin)
+  - API listening at: $API_HOST:$API_PORT  (SPA + /api + /admin same origin;
+    reachable on this host as $URL_HOST:$API_PORT — agents phone home here)
 EOF

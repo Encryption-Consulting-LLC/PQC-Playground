@@ -9,7 +9,16 @@ import uvicorn
 
 
 def main() -> None:
-    uvicorn.run("app.main:app", reload=True)
+    """Dev server. Binds all interfaces (``API_HOST``/``API_PORT`` to override):
+    guest VMs phone home to the backend directly over the LAN, so a
+    loopback-only listener makes every agent connection fail against a dev
+    backend too."""
+    uvicorn.run(
+        "app.main:app",
+        host=os.environ.get("API_HOST", "0.0.0.0"),
+        port=int(os.environ.get("API_PORT", "8000")),
+        reload=True,
+    )
 
 
 def _esxi_worker_argv() -> list[str]:
