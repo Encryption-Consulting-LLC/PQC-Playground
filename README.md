@@ -177,6 +177,17 @@ Open <http://localhost:5432>. Vite proxies `/api` HTTP and WebSocket traffic to
    Deploying a domain controller without one is rejected with a 422.
 7. Create the preconfigured PKI project, review the compiler output, and deploy.
 
+> **The starter project's default domain admin password ships inside the browser
+> bundle.** `VITE_PKI_DOMAIN_ADMIN_PASSWORD` is `VITE_`-prefixed, so its value —
+> including the `EcPkiLab#2026Key` fallback hardcoded in
+> [`frontend/src/lib/projectTemplate.ts`](frontend/src/lib/projectTemplate.ts) — is
+> compiled into the public JavaScript and readable by anyone who can load the page.
+> It is a deliberately throwaway lab credential, and since first boot now makes it
+> the real domain admin password, override it at build time (or edit the DC node's
+> password before deploying) for anything that is not disposable. The value is also
+> written as plaintext PowerShell into the DC's `<vm>-config.iso`, which stays
+> attached on the datastore until the VM is torn down.
+
 Environment values such as `ESXI_*`, `CLONE_*`, and `GUEST_*` only seed the
 Mongo settings document when values are absent. Once seeded, the operator-edited
 document is authoritative and changes take effect without an API restart. See
