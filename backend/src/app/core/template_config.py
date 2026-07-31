@@ -7,7 +7,8 @@ executor as command params once the agent phones home. This module is the
 **authoritative** validator for them — the client map is never trusted:
 
 * ``validate_template_config`` rejects (422) any unknown config key (the
-  key-injection gate) and any bad value for a known key;
+  key-injection gate), any bad value for a known key, and any ``required`` field
+  the caller omitted or left blank;
 * ``extract_template_config`` returns the provisioning-relevant subset with
   defaults filled, ready to persist on the VM registry and later dispatch.
 
@@ -121,6 +122,13 @@ class FieldSpec:
     #: than ``validate``, encrypted at rest (``encrypt_config_secrets``), and
     #: never logged, returned by an API, or echoed into an op label.
     secret: bool = False
+    #: Must be present *and* non-blank in the submitted params.
+    #: ``validate_template_config`` otherwise only sees the keys a caller sent, so
+    #: an omitted field is invisible to it and ``extract_template_config`` quietly
+    #: fills the default — for the DC's password that meant a forest promoted with
+    #: an empty DSRM password and an unjoinable domain, surfacing four sequence
+    #: steps deep instead of at the 422 gate.
+    required: bool = False
 
 
 # Mirror of the CA/DC/webServer ``configFields`` in templates.ts. Templates with
@@ -147,7 +155,9 @@ TEMPLATE_CONFIG_FIELDS: dict[str, dict[str, FieldSpec]] = {
         # script so that credential actually exists. ``validate`` is a
         # placeholder — secrets go through ``password_policy_errors`` in
         # ``validate_template_config``.
-        DOMAIN_ADMIN_PASSWORD_KEY: FieldSpec(lambda _v: True, "", secret=True),
+        DOMAIN_ADMIN_PASSWORD_KEY: FieldSpec(
+            lambda _v: True, "", secret=True, required=True
+        ),
     },
     "certificateAuthority": {
         "caType": FieldSpec(_one_of("Root", "Issuing"), "Root"),
@@ -183,16 +193,25 @@ TEMPLATE_CONFIG_FIELDS: dict[str, dict[str, FieldSpec]] = {
 
 
 def validate_template_config(template: str, params: Mapping[str, str]) -> None:
-    """Raise ``ValueError`` on any unknown config key or bad known value.
+    """Raise ``ValueError`` on a missing required field, any unknown config key,
+    or a bad known value.
 
     ``params`` is the whole createVm param map; reserved keys (vmName/template/
     isoId) are skipped. An unknown template is treated as having no config
     fields, so any config key on it is rejected. Secret fields are validated
     against the AD-complexity policy (with the VM name in scope), not their
     placeholder ``validate``.
+
+    Required fields are checked first, over the *schema* rather than the params,
+    so an omitted key is caught as crisply as a blank one.
     """
     schema = TEMPLATE_CONFIG_FIELDS.get(template, {})
     vm_name = params.get("vmName", "")
+    for key, spec in schema.items():
+        if spec.required and not params.get(key, "").strip():
+            raise ValueError(
+                f"config field '{key}' is required for template '{template}'"
+            )
     for key, value in params.items():
         if key in RESERVED_PARAM_KEYS:
             continue

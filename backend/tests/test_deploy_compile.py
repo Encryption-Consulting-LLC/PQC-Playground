@@ -112,7 +112,11 @@ def _request() -> DeployRequest:
             "id": "create-dc",
             "kind": "createVm",
             "target": "dc",
-            "params": {"vmName": "DC01", "template": "domainController"},
+            "params": {
+                "vmName": "DC01",
+                "template": "domainController",
+                "domainAdminPassword": "Str0ng-Lab-Pass!",
+            },
             "dependsOn": ["untrusted"],
         },
     ]
