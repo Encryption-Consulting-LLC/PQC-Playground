@@ -112,6 +112,8 @@ async def _ensure_indexes() -> None:
             IndexModel([("vmName", ASCENDING)], unique=True),
             # Canvas → registry lookups.
             IndexModel([("projectId", ASCENDING), ("nodeId", ASCENDING)]),
+            # Environment grouping for the admin teardown console.
+            IndexModel([("owner", ASCENDING), ("projectCode", ASCENDING)]),
             # moid is unique when known, absent allowed.
             IndexModel([("moid", ASCENDING)], unique=True, sparse=True),
         ]

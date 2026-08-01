@@ -84,9 +84,20 @@ class VmRegistryEntry(MongoModel):
     ``vmName`` (the real ESXi inventory name) is the natural unique key,
     enforced by index rather than by ``_id`` — a re-clone shouldn't change
     document identity. App names ("WS-1") repeat across projects.
+
+    ``owner``/``projectId``/``projectCode`` record which lab a VM belongs to,
+    written on the first (``cloning``) upsert so attribution survives a clone
+    that then fails. The name encodes the same facts, but lossily — a name
+    yields six characters of the project id and a slug of the username, never
+    the values themselves — so both are stored: ``projectCode`` is what a
+    name-parsed legacy row can also produce and is therefore what grouping
+    keys on, while ``projectId`` is the real id for anything that has to look
+    the project up.
     """
 
+    owner: str | None = None
     project_id: str | None = Field(default=None, alias="projectId")
+    project_code: str | None = Field(default=None, alias="projectCode")
     node_id: str | None = Field(default=None, alias="nodeId")
     app_name: str = Field(alias="appName")
     vm_name: str = Field(alias="vmName")

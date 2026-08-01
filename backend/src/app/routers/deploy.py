@@ -634,6 +634,9 @@ async def deploy(
                 "jobId": job_id,
                 "owner": user.username,
                 "ownerRole": user.role.value,
+                # Recorded so this run can attribute the VMs it created —
+                # ``jobId`` is the only link a registry row keeps back here.
+                "projectId": req.project_id,
                 "topology": redact_evidence(req.topology.model_dump(by_alias=True)),
                 "operations": redact_evidence(
                     [op.model_dump(by_alias=True) for op in req.ops]

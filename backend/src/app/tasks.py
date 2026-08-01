@@ -71,6 +71,7 @@ from app.core.infrastructure_preflight import (
 )
 from app.core.settings import settings
 from app.core.evidence import redact_evidence
+from app.core.vm_naming import project_code
 from app.core.template_config import (
     DOMAIN_ADMIN_PASSWORD_KEY,
     encrypt_config_secrets,
@@ -766,6 +767,8 @@ def _run_clone_op(
     push,
     owner_role: str = "guest",
     image_config: "GoldenImageConfig | InfrastructureProfile | None" = None,
+    owner: str | None = None,
+    project_id: str | None = None,
 ) -> bool:
     """Execute a ``createVm`` op for real, from one of three ISO sources:
 
@@ -865,8 +868,22 @@ def _run_clone_op(
             push()
             return False
 
+    # Attribution is written on this FIRST upsert, not the later ``ready`` one,
+    # so a clone that fails still leaves a row the admin console can group and
+    # blame — an errored VM nobody can trace back to an owner is exactly the
+    # debris the teardown view exists to find. ``$set`` fields persist, so the
+    # ``ready`` upsert below needs no repeat.
     _registry_upsert_sync(
-        db, vm_name, appName=op.target, status="cloning", jobId=job_id, ip=ip
+        db,
+        vm_name,
+        appName=op.target,
+        nodeId=op.target,
+        owner=owner,
+        projectId=project_id,
+        projectCode=project_code(project_id) if project_id else None,
+        status="cloning",
+        jobId=job_id,
+        ip=ip,
     )
     try:
         with TemporaryDirectory() as tmp:
@@ -1757,6 +1774,8 @@ def run_plan_operation_task(
                             op.params["template"], op.params.get("caType")
                         )
                     ],
+                    owner=owner,
+                    project_id=request.project_id,
                 )
             elif op.kind is PlanOpKind.provision:
                 # Deliberately no ESXi connection here — provision ops run on

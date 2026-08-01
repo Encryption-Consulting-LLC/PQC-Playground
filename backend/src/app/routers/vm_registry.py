@@ -26,7 +26,9 @@ class VmRegistryUpsert(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
 
     app_name: str = Field(min_length=1, max_length=120, alias="appName")
+    owner: str | None = None
     project_id: str | None = Field(default=None, alias="projectId")
+    project_code: str | None = Field(default=None, alias="projectCode")
     node_id: str | None = Field(default=None, alias="nodeId")
     moid: str | None = None
     status: Literal["cloning", "ready", "error", "deleted"] = "ready"
