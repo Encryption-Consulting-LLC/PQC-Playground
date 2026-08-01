@@ -68,10 +68,21 @@ def _resolve_node(db, node_id: str) -> NodeContext:
 
 
 def _namespace_prefix(vm_name: str) -> str | None:
-    """The ``guest-<slug>-`` prefix a namespaced VM's siblings share, or None
-    for a non-namespaced (operator) name."""
+    """The prefix a namespaced VM's siblings share, or None for a
+    non-namespaced (operator) name.
+
+    ``authz.enforce_guest_vm_name`` builds every VM a guest deploys from a plan
+    as ``guest-<user>-<project>-<machine>``, so the ``guest-<user>-`` prefix
+    alone spans *every* project that guest ever deployed — wide enough for a
+    sibling lookup to land on a torn-down environment's DC. Keep the project
+    segment. A projectless direct clone (``guest-<user>-<machine>``) has no
+    plan siblings to find, so it keeps the user-wide prefix."""
     parts = vm_name.split("-")
-    if len(parts) >= 3 and parts[0] == "guest":
+    if parts[0] != "guest":
+        return None
+    if len(parts) >= 4:
+        return f"guest-{parts[1]}-{parts[2]}-"
+    if len(parts) == 3:
         return f"guest-{parts[1]}-"
     return None
 
