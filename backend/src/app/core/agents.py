@@ -175,3 +175,40 @@ def resolve_agent(vm_id: str) -> AgentConnection | None:
 def connected_vm_ids() -> list[str]:
     with _lock:
         return sorted(_connected.keys())
+
+
+#: Close code sent to an agent whose VM is being torn down, so the guest-side
+#: agent can tell revocation apart from an ordinary disconnect and stop
+#: reconnecting.
+TEARDOWN_CLOSE_CODE = 4410
+
+
+async def revoke_live_agent_sockets(vm_names: list[str]) -> list[str]:
+    """Force-close the live agent socket of every named VM; returns the vm_ids
+    that were actually connected.
+
+    Called before a teardown is enqueued so a VM can't keep receiving commands
+    while it is being destroyed. Best effort — the worker also revokes the
+    identity itself (agent unset, registry marked deleted), and a VM whose
+    agent was already gone simply contributes nothing here.
+
+    Lives in the API process because ``_connected`` does: the map is
+    in-process, so a worker could not close these sockets even if it wanted to.
+    """
+    from app.core.db import vm_registry_col  # deferred: keep importable without Mongo
+
+    revoked: list[str] = []
+    cursor = vm_registry_col().find({"vmName": {"$in": vm_names}}, {"agent": 1})
+    async for doc in cursor:
+        vm_id = (doc.get("agent") or {}).get("vmId")
+        if not vm_id:
+            continue
+        conn = pop_connection(vm_id)
+        if conn is None:
+            continue
+        revoked.append(vm_id)
+        try:
+            await conn.websocket.close(code=TEARDOWN_CLOSE_CODE)
+        except Exception:  # noqa: BLE001 — the socket may already be gone
+            pass
+    return revoked
