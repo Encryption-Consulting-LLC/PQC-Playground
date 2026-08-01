@@ -136,6 +136,138 @@ def admin_exists() -> None:
     sys.exit(0 if present else 1)
 
 
+def _backfill_fields(
+    doc: dict,
+    *,
+    plan_owner: str | None = None,
+    plan_project_id: str | None = None,
+    slug_owners: dict[str, list[str]] | None = None,
+) -> dict:
+    """What can be recovered for one registry row that predates attribution.
+
+    Three sources, in descending order of certainty:
+
+    1. the plan run that created the VM — a real username, but only reachable
+       while the run survives its 7-day TTL;
+    2. the VM name plus the accounts list — a slug identifies an account only
+       when exactly one account produces it, so two colliding accounts write
+       no owner at all;
+    3. the VM name alone — always good for the project *code*.
+
+    The project *id* is never invented: the name carries six characters of it
+    and no more, so writing the parsed segment into ``projectId`` would poison
+    a field other code reads as a real id. Only a plan run can supply it.
+
+    Returns just the fields this row is missing, which is what makes a second
+    run a no-op.
+    """
+    from app.core.vm_naming import parse_guest_vm_name
+
+    parsed = parse_guest_vm_name(doc["vmName"])
+    candidate: dict = {}
+
+    if plan_owner:
+        candidate["owner"] = plan_owner
+    elif parsed is not None:
+        matches = sorted(set((slug_owners or {}).get(parsed.user, ())))
+        if len(matches) == 1:
+            candidate["owner"] = matches[0]
+
+    if plan_project_id:
+        candidate["projectId"] = plan_project_id
+    if parsed is not None and parsed.project_code:
+        candidate["projectCode"] = parsed.project_code
+
+    return {key: value for key, value in candidate.items() if not doc.get(key)}
+
+
+def backfill_vm_owners() -> None:
+    """Recover owner/project attribution for VMs cloned before it was stored.
+
+    Dry run by default — unlike ``create-admin`` this rewrites existing
+    documents, so seeing the decisions before they land is the point. Pass
+    ``--apply`` to write.
+
+    The report flags project codes that appear on a single VM: a code shared by
+    several VMs is near-certainly a real lab, whereas a lone one may be a
+    machine name that merely happened to look code-shaped, and is worth a look
+    before it becomes an environment an admin can destroy as a unit.
+    """
+    from collections import Counter
+
+    from pymongo import MongoClient
+
+    from app.core.settings import settings
+    from app.core.vm_naming import user_slug
+
+    parser = argparse.ArgumentParser(
+        description="Backfill owner/project fields on vm_registry entries."
+    )
+    parser.add_argument(
+        "--apply", action="store_true", help="write the changes (default: dry run)"
+    )
+    args = parser.parse_args()
+
+    client: MongoClient = MongoClient(settings.mongo_url, serverSelectionTimeoutMS=5000)
+    try:
+        db = client[settings.mongo_db]
+        slug_owners: dict[str, list[str]] = {}
+        for user in db["users"].find({}, {"username": 1}):
+            slug_owners.setdefault(user_slug(user["username"]), []).append(
+                user["username"]
+            )
+
+        plans: dict[str, dict] = {
+            run["jobId"]: run
+            for run in db["plan_runs"].find(
+                {}, {"jobId": 1, "owner": 1, "projectId": 1}
+            )
+        }
+
+        planned: list[tuple[str, dict]] = []
+        for doc in db["vm_registry"].find({}):
+            run = plans.get(doc.get("jobId") or "", {})
+            fields = _backfill_fields(
+                doc,
+                plan_owner=run.get("owner"),
+                plan_project_id=run.get("projectId"),
+                slug_owners=slug_owners,
+            )
+            if fields:
+                planned.append((doc["vmName"], fields))
+
+        if not planned:
+            print("Nothing to backfill — every registry entry is already attributed.")
+            return
+
+        code_counts = Counter(
+            fields["projectCode"] for _, fields in planned if "projectCode" in fields
+        )
+        for vm_name, fields in sorted(planned):
+            rendered = ", ".join(f"{k}={v}" for k, v in sorted(fields.items()))
+            print(f"  {vm_name}: {rendered}")
+        print(f"\n{len(planned)} entr{'y' if len(planned) == 1 else 'ies'} to update.")
+
+        for code, count in sorted(code_counts.items()):
+            label = f"  project {code}: {count} VM{'' if count == 1 else 's'}"
+            print(f"{label}{'  ← single VM, worth reviewing' if count == 1 else ''}")
+
+        if not args.apply:
+            print("\nDry run — re-run with --apply to write.")
+            return
+
+        for vm_name, fields in planned:
+            # Guard on the fields still being unset so a concurrent clone
+            # writing real attribution is never overwritten by a guess.
+            query: dict = {"vmName": vm_name}
+            for key in fields:
+                query[key] = {"$in": [None, ""]}
+            db["vm_registry"].update_one(query, {"$set": fields})
+        print(f"\nUpdated {len(planned)} registry entries.")
+    finally:
+        client.close()
+
+
 def create_admin() -> None:
     """Bootstrap CLI: provision an account (``uv run create-admin``), any role.
 
