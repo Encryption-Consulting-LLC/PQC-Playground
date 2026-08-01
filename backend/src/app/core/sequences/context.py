@@ -28,6 +28,7 @@ import logging
 from app.core.firstboot import hostname_for
 from app.core.sequences.model import DnsRecordContext, NodeContext, RunContext
 from app.core.template_config import decrypt_config_secrets
+from app.core.vm_naming import namespace_prefix
 
 logger = logging.getLogger(__name__)
 
@@ -71,23 +72,9 @@ def _resolve_node(db, node_id: str) -> NodeContext:
 
 
 def _namespace_prefix(vm_name: str) -> str | None:
-    """The prefix a namespaced VM's siblings share, or None for a
-    non-namespaced (operator) name.
-
-    ``authz.enforce_guest_vm_name`` builds every VM a guest deploys from a plan
-    as ``guest-<user>-<project>-<machine>``, so the ``guest-<user>-`` prefix
-    alone spans *every* project that guest ever deployed — wide enough for a
-    sibling lookup to land on a torn-down environment's DC. Keep the project
-    segment. A projectless direct clone (``guest-<user>-<machine>``) has no
-    plan siblings to find, so it keeps the user-wide prefix."""
-    parts = vm_name.split("-")
-    if parts[0] != "guest":
-        return None
-    if len(parts) >= 4:
-        return f"guest-{parts[1]}-{parts[2]}-"
-    if len(parts) == 3:
-        return f"guest-{parts[1]}-"
-    return None
+    """The prefix a namespaced VM's siblings share — the same parse
+    ``authz.enforce_guest_vm_name`` builds names with (``core/vm_naming``)."""
+    return namespace_prefix(vm_name)
 
 
 def _plan_node_ids(topology) -> set[str] | None:

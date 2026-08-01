@@ -128,7 +128,14 @@ def hostname_for(vm_name: str) -> str:
     is clipped by the 15-char fit. Non-namespaced (operator) names are used
     as-is. Callers (firstboot render + the sequence engine's NodeContext) all
     route through this one function, so the OS hostname and the promoted DC name
-    always agree."""
+    always agree.
+
+    The tail split here deliberately does *not* reuse ``core/vm_naming``: that
+    module answers "who owns this VM and which project is it in", where a
+    six-alphanumeric second segment is a project code and anything else is part
+    of the machine name. This one answers "what fits in 15 NetBIOS characters
+    and stays unique on a shared subnet", where keeping an ambiguous segment is
+    strictly safer than dropping it. Same string, different questions."""
     safe = _UNSAFE_HOSTNAME_CHARS.sub("-", vm_name).strip("-") or "vm"
     parts = safe.split("-")
     if parts[0] == "guest" and len(parts) > 2:
