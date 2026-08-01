@@ -104,6 +104,62 @@ def test_sibling_lookup_skips_an_earlier_projects_domain_controller(monkeypatch)
     assert found.node_id == "dc-new"
 
 
+def test_topology_scope_confines_the_lookup_to_the_plans_own_nodes(monkeypatch):
+    # Operator-named VMs carry no namespace at all, so only the plan's node set
+    # separates this deploy's DC from a previous one's.
+    db = {
+        "vm_registry": _FakeCollection(
+            [
+                _registry_doc("lab-old-dc01", "dc-old", "domainController"),
+                _registry_doc("lab-new-dc01", "dc-new", "domainController"),
+            ]
+        )
+    }
+    monkeypatch.setattr(
+        sequence_context,
+        "_resolve_node",
+        lambda db, node_id: _node(node_id, "domainController"),
+    )
+
+    assert (
+        sequence_context._find_domain_controller(db, "lab-new-ca02").node_id == "dc-old"
+    )
+    found = sequence_context._find_domain_controller(
+        db, "lab-new-ca02", {"dc-new", "ca02"}
+    )
+
+    assert found.node_id == "dc-new"
+
+
+def test_build_run_context_scopes_by_topology(monkeypatch):
+    seen = {}
+
+    def _capture(db, name, template, scope=None):
+        seen[template] = scope
+        return None
+
+    monkeypatch.setattr(
+        sequence_context,
+        "_resolve_node",
+        lambda db, node_id: _node(node_id, "certificateAuthority"),
+    )
+    monkeypatch.setattr(sequence_context, "_find_by_template", _capture)
+    monkeypatch.setattr(
+        sequence_context, "_find_ca_by_type", lambda db, name, ca_type, scope=None: None
+    )
+    op = SimpleNamespace(
+        kind=SimpleNamespace(value="caConnect"), target="ca02", secondary=None
+    )
+    topology = SimpleNamespace(
+        nodes=[SimpleNamespace(id="ca02"), SimpleNamespace(id="dc01")], dns_records=[]
+    )
+
+    sequence_context.build_run_context({}, op, [], topology)
+
+    assert seen["domainController"] == {"ca02", "dc01"}
+    assert seen["webServer"] == {"ca02", "dc01"}
+
+
 def test_web_publication_context_targets_the_web_host(monkeypatch):
     ca = _node("ca02", "certificateAuthority", {"caType": "Issuing"})
     root = _node("ca01", "certificateAuthority", {"caType": "Root"})
