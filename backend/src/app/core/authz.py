@@ -56,6 +56,8 @@ class Capability(str, Enum):
     VM_POWER = "vm:power"
     VM_DELETE = "vm:delete"
     VM_PROVISION = "vm:provision"  # run a template's role provisioning on one's own VM
+    # admin cross-user VM/environment teardown (the /admin console)
+    VM_TEARDOWN_ADMIN = "vm:teardown-admin"
     CONFIG_GENERATE = "config:generate"
     ISO_AUTHOR = "iso:author"
     VM_EXEC_ARBITRARY = "vm:exec-arbitrary"  # reserved — operator-only escape hatch
@@ -105,6 +107,13 @@ class Capability(str, Enum):
 #   DEPLOY_ADMIN is admin-only: the cross-user deployment kill-switch (stop a
 #     whole user's or every user's active deployments from the /admin console)
 #     is platform oversight, distinct from operators' own-job DEPLOY cancel.
+#   VM_TEARDOWN_ADMIN is admin-only for the same reason, and is deliberately
+#     NOT VM_DELETE: operators and guests hold that one, scoped to their own
+#     VMs by ``enforce_guest_vm_ownership``. This capability crosses the
+#     ownership boundary — reclaiming a dead lab someone else abandoned is
+#     platform housekeeping, and an admin with no way to do it can only watch
+#     the guest IP pool fill up. Admins still get no VM_DELETE, so the
+#     boundary-crossing surface is exactly the /admin teardown routes.
 ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
     Role.ADMIN: {
         Capability.SETTINGS_READ,
@@ -113,7 +122,12 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.REGISTRY_WRITE,
         Capability.USER_ADMIN,
         Capability.DEPLOY_ADMIN,
+        Capability.VM_TEARDOWN_ADMIN,
     },
+    # NOTE: the admin-only set is written out twice — once granted above and
+    # once subtracted here. ``test_authz_admin_capabilities`` asserts the two
+    # stay in step, because forgetting the subtraction silently grants an
+    # admin-only capability to every operator.
     Role.OPERATOR: set(Capability)
     - {
         Capability.SETTINGS_READ,
@@ -122,6 +136,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.REGISTRY_WRITE,
         Capability.USER_ADMIN,
         Capability.DEPLOY_ADMIN,
+        Capability.VM_TEARDOWN_ADMIN,
     },
     Role.GUEST: {
         Capability.VM_LIST,
