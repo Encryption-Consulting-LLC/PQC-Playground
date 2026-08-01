@@ -118,13 +118,19 @@ def test_web_publication_context_targets_the_web_host(monkeypatch):
         sequence_context, "_resolve_node", lambda db, node_id: by_id[node_id]
     )
     monkeypatch.setattr(
-        sequence_context, "_find_domain_controller", lambda db, name: dc
+        sequence_context, "_find_domain_controller", lambda db, name, scope=None: dc
     )
     monkeypatch.setattr(
-        sequence_context, "_find_by_template", lambda db, name, template: web
+        sequence_context,
+        "_find_by_template",
+        lambda db, name, template, scope=None: web,
     )
-    monkeypatch.setattr(sequence_context, "_find_issuing_ca", lambda db, name: ca)
-    monkeypatch.setattr(sequence_context, "_find_root_ca", lambda db, name: root)
+    monkeypatch.setattr(
+        sequence_context, "_find_issuing_ca", lambda db, name, scope=None: ca
+    )
+    monkeypatch.setattr(
+        sequence_context, "_find_root_ca", lambda db, name, scope=None: root
+    )
     op = SimpleNamespace(
         kind=SimpleNamespace(value="webServerCert"),
         target="ca02",

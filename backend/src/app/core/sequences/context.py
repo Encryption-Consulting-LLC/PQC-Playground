@@ -11,7 +11,10 @@ which is the canvas node id) for its real vmName, agent vm_id, IP and stored
 
 Resolving from the registry, not the plan's own ``createVm`` ops, keeps it
 correct on a **retry** plan — where the already-``done`` createVm ops have been
-dropped from the op list but the VMs (and their registry docs) still exist.
+dropped from the op list but the VMs (and their registry docs) still exist. The
+registry outlives a single plan, though, so every by-role lookup is confined to
+the node ids the plan's own topology declares; without that a user's earlier,
+long-torn-down environment is just as eligible as the one being deployed.
 
 Every hostname a step emits into a URL / CNAME / UNC / ACL is the *other*
 node's real guest-namespaced ``firstboot.hostname_for(vmName)`` — never a
@@ -87,49 +90,82 @@ def _namespace_prefix(vm_name: str) -> str | None:
     return None
 
 
-def _find_by_template(db, sibling_vm_name: str, template_id: str) -> NodeContext | None:
-    """The node of ``template_id`` sharing ``sibling_vm_name``'s guest namespace,
-    if one is registered — how ops locate the forest's DC / web host / root CA
-    without the plan naming every node explicitly."""
-    query = {"agent.templateId": template_id, "status": {"$ne": "deleted"}}
+def _plan_node_ids(topology) -> set[str] | None:
+    """The canvas node ids this plan's topology declares — the exact set a
+    sibling lookup is allowed to resolve within. None when the caller supplied
+    no topology, leaving only the VM-name namespace to scope by."""
+    if topology is None:
+        return None
+    return {node.id for node in topology.nodes}
+
+
+def _scoped_query(query: dict, sibling_vm_name: str, scope: "set[str] | None") -> dict:
+    """Confine a sibling lookup to one environment, in place.
+
+    ``scope`` — the plan's own topology node ids — is exact and preferred: a VM
+    from a previous deploy is simply not in it. The VM-name namespace is the
+    fallback for callers without a topology; it is coarser, because a name
+    carries no more than the guest's identity and project code."""
+    if scope is not None:
+        query["appName"] = {"$in": sorted(scope)}
+        return query
     prefix = _namespace_prefix(sibling_vm_name)
     if prefix is not None:
         query["vmName"] = {"$regex": f"^{prefix}"}
+    return query
+
+
+def _find_by_template(
+    db, sibling_vm_name: str, template_id: str, scope: "set[str] | None" = None
+) -> NodeContext | None:
+    """The node of ``template_id`` sharing ``sibling_vm_name``'s environment, if
+    one is registered — how ops locate the forest's DC / web host / root CA
+    without the plan naming every node explicitly."""
+    query = _scoped_query(
+        {"agent.templateId": template_id, "status": {"$ne": "deleted"}},
+        sibling_vm_name,
+        scope,
+    )
     doc = db["vm_registry"].find_one(query)
     return _resolve_node(db, doc["appName"]) if doc else None
 
 
-def _find_domain_controller(db, sibling_vm_name: str) -> NodeContext | None:
-    return _find_by_template(db, sibling_vm_name, "domainController")
+def _find_domain_controller(
+    db, sibling_vm_name: str, scope: "set[str] | None" = None
+) -> NodeContext | None:
+    return _find_by_template(db, sibling_vm_name, "domainController", scope)
 
 
-def _find_issuing_ca(db, sibling_vm_name: str) -> NodeContext | None:
-    """The enterprise *issuing* CA sharing ``sibling_vm_name``'s namespace — the
-    node clients enroll against and the web host's OCSP responder points at.
-    Picks a certificateAuthority whose (decrypted) config is caType=Issuing."""
-    query = {"agent.templateId": "certificateAuthority", "status": {"$ne": "deleted"}}
-    prefix = _namespace_prefix(sibling_vm_name)
-    if prefix is not None:
-        query["vmName"] = {"$regex": f"^{prefix}"}
+def _find_ca_by_type(
+    db, sibling_vm_name: str, ca_type: str, scope: "set[str] | None" = None
+) -> NodeContext | None:
+    """The certificateAuthority in ``sibling_vm_name``'s environment whose
+    (decrypted) config is ``caType=<ca_type>``."""
+    query = _scoped_query(
+        {"agent.templateId": "certificateAuthority", "status": {"$ne": "deleted"}},
+        sibling_vm_name,
+        scope,
+    )
     for doc in db["vm_registry"].find(query):
         node = _resolve_node(db, doc["appName"])
-        if node.template_config.get("caType") == "Issuing":
+        if node.template_config.get("caType") == ca_type:
             return node
     return None
 
 
-def _find_root_ca(db, sibling_vm_name: str) -> NodeContext | None:
-    """The standalone root CA sharing the operation's guest namespace."""
+def _find_issuing_ca(
+    db, sibling_vm_name: str, scope: "set[str] | None" = None
+) -> NodeContext | None:
+    """The enterprise *issuing* CA — the node clients enroll against and the web
+    host's OCSP responder points at."""
+    return _find_ca_by_type(db, sibling_vm_name, "Issuing", scope)
 
-    query = {"agent.templateId": "certificateAuthority", "status": {"$ne": "deleted"}}
-    prefix = _namespace_prefix(sibling_vm_name)
-    if prefix is not None:
-        query["vmName"] = {"$regex": f"^{prefix}"}
-    for doc in db["vm_registry"].find(query):
-        node = _resolve_node(db, doc["appName"])
-        if node.template_config.get("caType") == "Root":
-            return node
-    return None
+
+def _find_root_ca(
+    db, sibling_vm_name: str, scope: "set[str] | None" = None
+) -> NodeContext | None:
+    """The standalone root CA of the operation's environment."""
+    return _find_ca_by_type(db, sibling_vm_name, "Root", scope)
 
 
 def dns_records_for_context(topology) -> tuple[DnsRecordContext, ...]:
@@ -156,7 +192,10 @@ def build_run_context(db, op, all_ops, topology=None) -> RunContext:
     Populates the alias keys the definitions use: ``primary`` (the op's target),
     ``secondary`` (its ``secondary`` node, when set), and ``dc`` (the domain
     controller — the ``secondary`` itself for a join, otherwise the DC found in
-    the same guest namespace). Domain facts come from the DC's own config.
+    the same environment). Domain facts come from the DC's own config.
+
+    Every by-role lookup is confined to ``topology``'s own nodes, so a plan can
+    only ever wire itself to the environment it describes.
     """
     kind = str(getattr(op.kind, "value", op.kind))
     # A webServerCert relationship is authored issuing-CA -> web-host so the
@@ -168,6 +207,7 @@ def build_run_context(db, op, all_ops, topology=None) -> RunContext:
     if primary_id is None:
         raise ContextError(f"operation '{kind}' has no primary node")
     nodes: dict[str, NodeContext] = {PRIMARY: _resolve_node(db, primary_id)}
+    scope = _plan_node_ids(topology)
 
     secondary_ctx = None
     if secondary_id:
@@ -179,7 +219,7 @@ def build_run_context(db, op, all_ops, topology=None) -> RunContext:
     if secondary_ctx is not None and secondary_ctx.template_id == "domainController":
         dc_ctx = secondary_ctx
     else:
-        dc_ctx = _find_domain_controller(db, nodes[PRIMARY].vm_name)
+        dc_ctx = _find_domain_controller(db, nodes[PRIMARY].vm_name, scope)
     if dc_ctx is not None:
         nodes[DC] = dc_ctx
 
@@ -192,10 +232,10 @@ def build_run_context(db, op, all_ops, topology=None) -> RunContext:
     ):
         nodes[ROOT] = secondary_ctx
     else:
-        root_ctx = _find_root_ca(db, nodes[PRIMARY].vm_name)
+        root_ctx = _find_root_ca(db, nodes[PRIMARY].vm_name, scope)
         if root_ctx is not None:
             nodes[ROOT] = root_ctx
-    web_ctx = _find_by_template(db, nodes[PRIMARY].vm_name, "webServer")
+    web_ctx = _find_by_template(db, nodes[PRIMARY].vm_name, "webServer", scope)
     if web_ctx is not None:
         nodes[WEB] = web_ctx
 
@@ -207,7 +247,7 @@ def build_run_context(db, op, all_ops, topology=None) -> RunContext:
     ):
         nodes[CA] = secondary_ctx
     else:
-        ca_ctx = _find_issuing_ca(db, nodes[PRIMARY].vm_name)
+        ca_ctx = _find_issuing_ca(db, nodes[PRIMARY].vm_name, scope)
         if ca_ctx is not None:
             nodes[CA] = ca_ctx
 
