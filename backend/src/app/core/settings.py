@@ -154,6 +154,24 @@ class Settings(BaseSettings):
     # plus the intermediate-boot window.
     agent_boot_settle_s: int = 180
 
+    # Admin teardown console — how long a registry entry has to look wrong
+    # before it is *flagged* as orphaned. These change what an admin sees
+    # classified, never what gets destroyed (that is always an explicit,
+    # previewed selection), so they are env knobs rather than settings-document
+    # fields: an operator tuning them is tuning a diagnostic, not the platform.
+    #   agent_dead — a VM whose agent last phoned home longer ago than this.
+    #     Generous by default: a lab left running over a weekend is fine, one
+    #     silent for a day is debris.
+    #   stuck_cloning — a registry row still in ``cloning`` this long after its
+    #     last write; a real clone finishes or errors well inside the hour.
+    teardown_agent_dead_after_s: int = 86_400
+    teardown_stuck_cloning_after_s: int = 3_600
+    # How long an ESXi inventory listing is reused across the polled teardown
+    # endpoints. ``list_vm_names`` rebuilds a container view over the whole
+    # inventory per call, and the console polls; the destroy preview bypasses
+    # this cache, so a stale entry can never reach a confirmation dialog.
+    teardown_inventory_cache_s: int = 15
+
     # LEGACY-IMAGE RECOVERY ONLY: uptime (seconds) past which a still-registered
     # FirstBootFinalize scheduled task is treated as having missed its
     # -AtStartup trigger; the worker then dispatches system.reboot. Current
