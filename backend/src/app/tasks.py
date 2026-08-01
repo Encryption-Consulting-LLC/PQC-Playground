@@ -271,6 +271,161 @@ def destroy_vm_task(job_id: str, name: str) -> None:
         )
 
 
+@celery_app.task(name="admin_teardown")
+def admin_teardown_task(
+    job_id: str,
+    vm_names: list[str],
+    actor: str | None = None,
+) -> None:
+    """Force-destroy a selection of VMs as one job, for the /admin console.
+
+    Deliberately one task rather than a fan-out of ``destroy_vm``: that task
+    owns a whole job id and publishes its own terminal frame, so N of them
+    means N sockets when the console needs one stream; the ``esxi`` queue is
+    capped at the simultaneous-clone ceiling, so a fan-out of eight destroys
+    would starve real clones while one bulk task holds a single slot; and one
+    task logs into ESXi once instead of N times.
+
+    Structured like ``teardown_plan_task``: every target is seeded ``pending``
+    and the WHOLE state map is republished on each transition, so a socket that
+    reconnects mid-run rebuilds complete progress from the last snapshot. A
+    per-VM failure is recorded and the run continues — one wedged VM must not
+    strand the rest of an abandoned lab.
+
+    ``plan-state`` is published even for a single-VM selection: the console
+    renders from that frame, and a one-off ``progress`` shape here would leave
+    it with nothing to draw.
+    """
+    transport.publish(job_id, RunningMsg(), status=JobStatus.running)
+    conn = None
+    try:
+        from app.routers.vm import CloneProgressReducer
+
+        state: dict[str, OpRunState] = {
+            name: OpRunState(status="pending") for name in vm_names
+        }
+        warnings: list[str] = []
+
+        def push() -> None:
+            transport.publish(
+                job_id, PlanStateMsg(ops=dict(state)), status=JobStatus.running
+            )
+
+        push()
+        logger.info(
+            "admin teardown %s: %d VM(s) requested by %s",
+            job_id,
+            len(vm_names),
+            actor or "unknown",
+        )
+        with worker_db() as db:
+            for position, vm_name in enumerate(vm_names):
+                # No UI surfaces this, but honouring the flag at VM boundaries
+                # keeps the admin console's existing stop switch coherent.
+                if transport.cancel_mode(job_id):
+                    for pending in vm_names[position:]:
+                        state[pending] = OpRunState(
+                            status="cancelled", detail="Teardown was stopped."
+                        )
+                    push()
+                    break
+
+                state[vm_name] = OpRunState(
+                    status="running", percent=0.0, phase="Destroying"
+                )
+                push()
+                already_absent = False
+                try:
+                    # Reopened per VM, inside the try: a transient ESXi blip
+                    # then costs one VM instead of the run, and a persistent
+                    # outage fails each with its own legible detail.
+                    conn = _live_worker_connection(conn)
+                    try:
+                        # Two ops: power off + destroy.
+                        reducer = CloneProgressReducer(
+                            _op_progress_publisher(state, vm_name, push), 2
+                        )
+                        destroy_workflow(conn, name=vm_name, progress=reducer)
+                    except VmNotFoundError:
+                        # Converges to success: a half-failed clone leaves only
+                        # registry and IP state, and that must be cleanable
+                        # through the same call. The address is still released.
+                        already_absent = True
+                    release_ip_sync(db, vm_name)
+                    _registry_upsert_sync(
+                        db,
+                        vm_name,
+                        status="deleted",
+                        powerState=None,
+                        ip=None,
+                        agent=None,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    # Any other failure leaves the allocation and the row alone
+                    # — the VM may still exist and still be using the address.
+                    logger.warning(
+                        "admin teardown %s: %s failed: %s", job_id, vm_name, exc
+                    )
+                    state[vm_name] = OpRunState(
+                        status="error", detail=str(exc), trace=traceback.format_exc()
+                    )
+                    warnings.append(f"{vm_name}: {exc}")
+                else:
+                    state[vm_name] = OpRunState(
+                        status="done",
+                        percent=100.0,
+                        phase="Already absent" if already_absent else "Destroyed",
+                        result={"vmName": vm_name, "alreadyAbsent": already_absent},
+                    )
+                push()
+
+        destroyed = [
+            name
+            for name, item in state.items()
+            if item.status == "done" and not (item.result or {}).get("alreadyAbsent")
+        ]
+        absent = [
+            name
+            for name, item in state.items()
+            if item.status == "done" and (item.result or {}).get("alreadyAbsent")
+        ]
+        failed = [name for name, item in state.items() if item.status == "error"]
+        logger.info(
+            "admin teardown %s complete: %d destroyed, %d already absent, %d failed",
+            job_id,
+            len(destroyed),
+            len(absent),
+            len(failed),
+        )
+        # Everything failing is still a completed *job* — the per-VM outcomes
+        # live in ``ops``, which is what lets the console render a mixed result
+        # instead of one opaque error.
+        transport.publish(
+            job_id,
+            DoneMsg(
+                result={
+                    "destroyed": destroyed,
+                    "alreadyAbsent": absent,
+                    "failed": failed,
+                    "warnings": warnings,
+                    "ops": {key: value.model_dump() for key, value in state.items()},
+                }
+            ),
+            status=JobStatus.done,
+            terminal=True,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface anything as a terminal error
+        transport.publish(
+            job_id,
+            ErrorMsg(status=500, detail=str(exc)),
+            status=JobStatus.error,
+            terminal=True,
+        )
+    finally:
+        if conn is not None:
+            Disconnect(conn.si)
+
+
 def _visible_steps(state: dict[str, OpRunState], op_id: str) -> dict[str, StepRunState]:
     current = state.get(op_id)
     return dict(current.steps) if current else {}

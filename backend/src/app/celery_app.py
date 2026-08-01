@@ -50,6 +50,7 @@ celery_app.conf.update(
     task_routes={
         "clone_vm": {"queue": "esxi"},
         "destroy_vm": {"queue": "esxi"},
+        "admin_teardown": {"queue": "esxi"},
         "start_plan_v2": {"queue": "esxi"},
         "teardown_plan": {"queue": "esxi"},
     },
