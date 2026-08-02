@@ -20,6 +20,7 @@ from app.core.sequences.health import (
     ML_DSA_87_SIGNATURE_OID,
     aggregate_lab_health,
 )
+from app.core.sequences.context import ContextError
 from app.core.sequences.model import DnsRecordContext, RunContext, Step, StepRuntime
 
 #: Context alias keys (mirror app.core.sequences.context).
@@ -971,6 +972,37 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
         }
         return {k: v for k, v in params.items() if v not in (None, "")}
 
+    def grant_params(template: str):
+        """Params for a ``template.grant_access`` step.
+
+        Carries the same domain-admin credential the CA install steps do: the
+        agent runs on the DC as LocalSystem (``DC01$``), which is privileged in
+        the domain NC but *not* granted ``WriteDacl`` on certificate-template
+        objects in the Configuration NC — without a credential the ACL write
+        comes back "Set-Acl : Access is denied".
+
+        Unlike the install builders this does not filter empty values out: a
+        silently dropped credential surfaces as an opaque agent-side
+        ``MissingParam`` instead of naming the DC config that's actually short.
+        """
+
+        def build(rt: StepRuntime) -> dict[str, str]:
+            dc = ctx.nodes.get(DC)
+            password = dc.template_config.get("domainAdminPassword") if dc else None
+            if not password:
+                raise ContextError(
+                    "the domain controller has no domainAdminPassword configured — "
+                    f"cannot grant '{template}' enroll access"
+                )
+            return {
+                "template": template,
+                "computer": ctx.node(WEB).hostname,
+                "username": _admin_username(ctx.netbios),
+                "password": password,
+            }
+
+        return build
+
     def issuing_settings_params(rt: StepRuntime) -> dict[str, str]:
         return {
             "crlPeriodUnits": "1",
@@ -1304,20 +1336,16 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
                 id="grant-ocsp",
                 command="template.grant_access",
                 target=DC,
-                params=lambda rt: {
-                    "template": "OCSPResponseSigning",
-                    "computer": ctx.node(WEB).hostname,
-                },
+                params=grant_params("OCSPResponseSigning"),
+                secret_keys=("password",),
                 retry_delays_s=_TEMPLATE_RETRY,
             ),
             Step(
                 id="grant-health-probe",
                 command="template.grant_access",
                 target=DC,
-                params=lambda rt: {
-                    "template": "Workstation",
-                    "computer": ctx.node(WEB).hostname,
-                },
+                params=grant_params("Workstation"),
+                secret_keys=("password",),
                 retry_delays_s=_TEMPLATE_RETRY,
             ),
         ]
