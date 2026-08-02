@@ -5,13 +5,13 @@ import { toast } from "sonner"
 
 import { QUERY_KEYS } from "@/constants"
 import {
-  ApiError,
   createUser,
   listUsers,
   patchUser,
   type AdminUser,
   type UserCreateRequest,
 } from "@/lib/api"
+import { formatDate, showError } from "@/lib/display"
 import { useMe } from "@/hooks/useMe"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -44,14 +44,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-
-const showError = (err: unknown) =>
-  toast.error(err instanceof ApiError ? `${err.status}: ${err.message}` : String(err))
-
-function formatDate(ms: number | null): string {
-  if (!ms) return "—"
-  return new Date(ms).toLocaleString()
-}
 
 /**
  * Guest/operator account control — the reason this app exists. Every action

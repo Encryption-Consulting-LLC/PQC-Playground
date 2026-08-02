@@ -3,6 +3,7 @@ import { Loader2 } from "lucide-react"
 
 import { QUERY_KEYS } from "@/constants"
 import { getIpPool } from "@/lib/api"
+import { formatDate } from "@/lib/display"
 import { Badge } from "@/components/ui/badge"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import {
@@ -13,11 +14,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table"
-
-function formatDate(ms: number | null): string {
-  if (!ms) return "—"
-  return new Date(ms).toLocaleString()
-}
 
 /**
  * Read-only view of the guest IP pool (core/ippool.py) — which addresses in
