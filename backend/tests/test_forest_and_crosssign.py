@@ -8,6 +8,9 @@ os.environ.setdefault(
     "SETTINGS_ENC_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 )
 
+import pytest  # noqa: E402
+
+from app.core.sequences.context import ContextError  # noqa: E402
 from app.core.sequences.definitions import (  # noqa: E402
     _ds_config_dn,
     _forest_mode,
@@ -304,6 +307,41 @@ def test_caconnect_installs_the_issued_cert_under_the_domain_admin():
     assert params["username"] == "ENCON\\Administrator"
     assert params["password"] == ctx.nodes["dc"].template_config["domainAdminPassword"]
     assert step.secret_keys == ("password",)
+
+
+def test_caconnect_grants_template_access_under_the_domain_admin():
+    """A template's DACL lives in the Configuration NC, where the DC's own
+    LocalSystem has no WriteDacl — the grants carry the credential too."""
+
+    ctx = _full_lab_ctx()
+    by_id = {s.id: s for s in op_sequence("caConnect", ctx)}
+    expected = {
+        "grant-ocsp": "OCSPResponseSigning",
+        "grant-health-probe": "Workstation",
+    }
+
+    for step_id, template in expected.items():
+        step = by_id[step_id]
+        params = step.resolve_params(ctx)
+        assert params["template"] == template
+        assert params["computer"] == ctx.nodes["web"].hostname
+        assert params["username"] == "ENCON\\Administrator"
+        assert (
+            params["password"] == ctx.nodes["dc"].template_config["domainAdminPassword"]
+        )
+        assert step.secret_keys == ("password",)
+
+
+def test_caconnect_template_grant_names_a_missing_domain_admin_password():
+    """Dropping the empty credential would reach the agent as an opaque
+    MissingParam — name the DC config that's actually short instead."""
+
+    ctx = _full_lab_ctx()
+    ctx.nodes["dc"].template_config.pop("domainAdminPassword")
+    step = {s.id: s for s in op_sequence("caConnect", ctx)}["grant-ocsp"]
+
+    with pytest.raises(ContextError, match="domainAdminPassword"):
+        step.resolve_params(ctx)
 
 
 def test_caconnect_recovers_missing_root_artifacts_from_configured_directory():
