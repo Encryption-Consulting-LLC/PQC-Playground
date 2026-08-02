@@ -1,35 +1,30 @@
-import { useState } from "react"
-import { Network, Rocket, Server, ShieldAlert, Users2 } from "lucide-react"
+import { RouterProvider } from "@tanstack/react-router"
+import { ShieldAlert } from "lucide-react"
 
 import { ROLES } from "@/constants"
 import { useAuthStore } from "@/store/auth"
-import { AppShell, type NavItem } from "@/components/AppShell"
 import { LoginForm } from "@/components/LoginForm"
 import { LogoutButton } from "@/components/LogoutButton"
 import { Splash } from "@/components/Splash"
 import { useApplyTheme } from "@/hooks/useTheme"
 import { useMe } from "@/hooks/useMe"
-import { UsersSection } from "@/sections/UsersSection"
-import { InfrastructureSection } from "@/sections/InfrastructureSection"
-import { IpPoolSection } from "@/sections/IpPoolSection"
-import { RegistrySection } from "@/sections/RegistrySection"
-import { DeploymentsSection } from "@/sections/DeploymentsSection"
+import { router } from "@/router"
 
-const SECTIONS: NavItem[] = [
-  { id: "users", label: "Accounts", icon: Users2 },
-  { id: "infrastructure", label: "Infrastructure", icon: Server },
-  { id: "deployments", label: "Deployments", icon: Rocket },
-  { id: "ip-pool", label: "IP Pool", icon: Network },
-  { id: "registry", label: "VM Registry", icon: ShieldAlert },
-]
-
+/**
+ * The auth gate sits *above* the router rather than inside it as route
+ * guards, and that is what preserves the URL across a lapsed session: while
+ * signed out the router is never mounted, so nothing navigates. `lib/api.ts`
+ * clears the store on a 401, this flips to the login form, and the address
+ * bar still reads wherever the admin was. Signing back in mounts the router,
+ * which reads `window.location` and lands there — no `?redirect=` param, and
+ * no open-redirect validation to get wrong.
+ */
 function App() {
   // Apply the resolved theme to <html> on every render, before any early
   // return, so the login/splash/denied screens are themed too.
   useApplyTheme()
 
   const token = useAuthStore((s) => s.token)
-  const [active, setActive] = useState("users")
 
   // Called unconditionally (before any early return) so hook order stays
   // stable across renders — useMe() internally no-ops via `enabled: !!token`
@@ -53,15 +48,7 @@ function App() {
     )
   }
 
-  return (
-    <AppShell username={me.username} sections={SECTIONS} active={active} onSelect={setActive}>
-      {active === "users" && <UsersSection />}
-      {active === "infrastructure" && <InfrastructureSection />}
-      {active === "deployments" && <DeploymentsSection />}
-      {active === "ip-pool" && <IpPoolSection />}
-      {active === "registry" && <RegistrySection />}
-    </AppShell>
-  )
+  return <RouterProvider router={router} />
 }
 
 export default App
