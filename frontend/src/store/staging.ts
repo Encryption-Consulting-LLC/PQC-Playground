@@ -573,10 +573,10 @@ export function applyPlanState(
  * Reverts every non-`done` op back to `staged` (and any `createVm`-target
  * node still `deploying` back to `staged`) — the shared unwind for a plan
  * that ended before every op resolved (socket drop, plan-level crash).
- * `done` ops are dropped from the list entirely, same as `finishDeploy` —
- * their canvas effect was already committed by `applyPlanState` when the
- * `done` transition arrived, and keeping them around would re-send them
- * (double-executing a real clone) on the next `deploy()`.
+ * `done` ops are kept, untouched: their canvas effect was already committed by
+ * `applyPlanState` when the `done` transition arrived, and they are the record
+ * of how far the run got. They can't be re-sent — every path to the wire goes
+ * through `prepareDeployPlan`, which drops them.
  */
 function revertNonTerminalToStaged(): void {
   const { ops } = useStagingStore.getState()
@@ -584,12 +584,15 @@ function revertNonTerminalToStaged(): void {
 
   const remaining: StagedOp[] = []
   for (const op of ops) {
-    if (op.status === OP_STATUS.done) continue
+    if (op.status === OP_STATUS.done) {
+      remaining.push(op)
+      continue
+    }
     if (op.synthesized) {
       // Display-only row: drop it (the next deploy re-materializes it) and
-      // unwind its node like any interrupted createVm — the parent clone may
-      // already read `done` and been dropped above, leaving nobody else to
-      // reset the node out of `provisioning`/`deploying`.
+      // unwind its node like any interrupted createVm — a `done` parent clone
+      // won't be re-sent, so nobody else would reset the node out of
+      // `provisioning`/`deploying`.
       topology.patchNodeData(op.targetNodeId, {
         lifecycle: LIFECYCLE.staged,
         progress: undefined,
@@ -629,17 +632,21 @@ function revertNonTerminalToStaged(): void {
 
 /**
  * Final reconcile once the plan job reaches `done`: apply the last snapshot,
- * drop fully-`done` ops off the list, and reopen `cancelled` ops (skipped only
- * because a dependency failed) as `staged` so "Retry deploy" resends them
- * alongside the op that actually failed.
+ * reopen `cancelled` ops (skipped only because a dependency failed) as `staged`
+ * so "Retry deploy" resends them alongside the op that actually failed, and
+ * decide what stays on the list.
  *
- * A run that ended with a failure keeps its `done` rows instead. Dropping them
- * left the panel showing one orphaned error row — the deploy's whole context
- * (which clones landed, which relationships were wired) gone, its number reset
- * to 1, and its `dependsOn` pointing at ids no longer in the list, so the next
- * project load would `sanitizeOps` away even that. The rows stay read-only and
- * are still never re-sent: `deploy()` prunes `done` through `prepareDeployPlan`
- * at retry time, which is the only moment the distinction matters.
+ * **A run that failed keeps every `done` row** — its own and any carried over
+ * from an earlier attempt. Dropping them left the panel showing one orphaned
+ * error row: the deploy's whole context (which clones landed, which
+ * relationships were wired) gone, its number reset to 1, and its `dependsOn`
+ * pointing at ids no longer in the list, so the next project load would
+ * `sanitizeOps` away even that.
+ *
+ * **A run with nothing failed empties the list**, including rows carried from
+ * previous attempts — the panel is a queue again once the queue is clear. The
+ * retained rows are never re-sent in the meantime: every path to the wire goes
+ * through `prepareDeployPlan`, which drops `done`.
  *
  * Exported for tests.
  */
@@ -666,11 +673,10 @@ export function finishDeploy(
   const remaining: StagedOp[] = []
   for (const op of ops) {
     const finalState = opsResult[op.id]
-    if (
-      finalState?.status === "done" &&
-      !failed &&
-      !failedProvisionParents.has(op.id)
-    )
+    // `?? op.status` covers a row carried over from an earlier attempt: this
+    // run never mentioned it, but it is still `done` and still history.
+    const status = finalState?.status ?? op.status
+    if (status === "done" && !failed && !failedProvisionParents.has(op.id))
       continue
     if (finalState?.status === "error") errorCount++
     remaining.push(
@@ -956,11 +962,11 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
 
     const token = useAuthStore.getState().token
 
-    // `done` ops already succeeded — drop them entirely so a retry never
-    // re-sends (and double-executes) them. Reset previously failed/cancelled
-    // ops back to staged so a retry resends them alongside whatever hadn't
-    // run yet. `dependsOn` is then pruned to only ids still present, so a
-    // dropped `done` op's id never reaches the backend as an unknown dep.
+    // `done` ops already succeeded — they're excluded from the payload so a
+    // retry never re-sends (and double-executes) them. Previously failed/
+    // cancelled ops reset to staged so a retry resends them alongside whatever
+    // hadn't run yet. `dependsOn` is then pruned to only ids being sent, so a
+    // withheld `done` op's id never reaches the backend as an unknown dep.
     const prepared = prepareDeployPlan(ops)
     const pruned = prepared.ops
 
@@ -971,7 +977,21 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
       }
     }
 
-    set({ ops: pruned.map((op) => ({ ...op, status: OP_STATUS.pending })) })
+    // Withheld from the wire, kept on the list: a retry after a partial
+    // failure must not erase the rows for the work that already succeeded —
+    // that history is most of what makes the one failure readable. Rows that
+    // are neither sent nor terminal (a synthetic provision row whose parent
+    // isn't being re-sent) have nothing left to say and go.
+    const sending = new Map(pruned.map((op) => [op.id, op]))
+    set({
+      ops: ops.flatMap((op) => {
+        const next = sending.get(op.id)
+        if (next) return [{ ...next, status: OP_STATUS.pending }]
+        return op.status === OP_STATUS.done || op.status === OP_STATUS.error
+          ? [op]
+          : []
+      }),
+    })
 
     deployPlan(prepared.payload, prepared.topology, prepared.projectId)
       .then(({ job_id, preflight }) => {

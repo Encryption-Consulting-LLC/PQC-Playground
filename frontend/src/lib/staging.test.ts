@@ -611,3 +611,58 @@ test("retained rows are never re-sent and never undone", () => {
   staging.useStagingStore.getState().undo()
   expect(staging.useStagingStore.getState().ops).toHaveLength(4)
 })
+
+test("a retry keeps the earlier attempt's succeeded rows, then clears on success", () => {
+  // The POST never settles: this test is about what `deploy()` leaves on the
+  // list, and a resolved/rejected request would race the assertions (and the
+  // next test) with its own state writes.
+  // (restored at the end by hand — `unstubAllGlobals` would also tear down the
+  // module-level localStorage/window stubs this file runs on.)
+  const realFetch = globalThis.fetch
+  vi.stubGlobal("fetch", () => new Promise(() => {}))
+  issuingCaScenario()
+  const failedRun = {
+    ops: {
+      "op-ca2": { status: "done", result: { vmName: "guest-ca02" } },
+      "op-web": { status: "done", result: { vmName: "guest-srv01" } },
+      "op-join": { status: "done" },
+      "op-connect": { status: "done" },
+      "op-cert": { status: "error", detail: "iis.setup_certenroll timed out" },
+    },
+  }
+  staging.finishDeploy(failedRun, "job1")
+
+  // Retry: only the failure goes to the wire, but the four succeeded rows stay
+  // on the list — this is where they used to vanish for a second time.
+  staging.useStagingStore.getState().deploy()
+  const afterRetry = staging.useStagingStore.getState().ops
+  expect(afterRetry.map((o) => o.id)).toEqual([
+    "op-ca2",
+    "op-web",
+    "op-join",
+    "op-connect",
+    "op-cert",
+  ])
+  expect(afterRetry.map((o) => o.status)).toEqual([
+    "done",
+    "done",
+    "done",
+    "done",
+    "pending",
+  ])
+
+  // The retry fails somewhere else: still the whole picture.
+  staging.finishDeploy(
+    {
+      ops: { "op-cert": { status: "error", detail: "ocsp.configure failed" } },
+    },
+    "job2",
+  )
+  expect(staging.useStagingStore.getState().ops).toHaveLength(5)
+
+  // It finally passes — nothing is outstanding, so the queue empties.
+  staging.useStagingStore.getState().deploy()
+  staging.finishDeploy({ ops: { "op-cert": { status: "done" } } }, "job3")
+  expect(staging.useStagingStore.getState().ops).toEqual([])
+  vi.stubGlobal("fetch", realFetch)
+})
