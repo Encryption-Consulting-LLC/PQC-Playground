@@ -36,9 +36,15 @@ from vmkit.errors import (
 )
 
 # Most-specific first; VmkitError (base) is the catch-all and must stay last.
+#
+# ``AuthenticationError`` is 502, never 401: vmkit raises it from one place, a
+# rejected *ESXi* login, so it says nothing about the caller's own session. 401
+# is reserved for that — the frontend clears the session on one, and mapping a
+# downstream credential failure onto it logged the operator out mid-deploy. See
+# ``core.esxi.get_esxi``, which has argued the same in prose since before this.
 _ERROR_STATUS: tuple[tuple[type[VmkitError], int], ...] = (
     (ValidationError, 422),
-    (AuthenticationError, 401),
+    (AuthenticationError, 502),
     (ConnectionFailedError, 502),
     (VmExistsError, 409),
     (VmNotFoundError, 404),
