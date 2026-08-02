@@ -169,6 +169,15 @@ export function nodeRealizationOps(
 }
 
 /**
+ * The ops a Deploy would actually send. `done` rows retained after a failed
+ * run are history — they stay listed for context, but they are never counted,
+ * re-sent, or undone.
+ */
+export function actionableOps(ops: StagedOp[]): StagedOp[] {
+  return ops.filter((op) => op.status !== OP_STATUS.done)
+}
+
+/**
  * The node an op's label names — the one it ultimately configures. Same
  * inversion `nodeRealizationOps` encodes: a `webServerCert` op *targets* the
  * issuing CA (that's whose certificate service it draws on) but realizes its
@@ -210,13 +219,21 @@ export function blockedRealizationDetail(cancelled: StagedOp[]): string {
   return `Blocked: ${kinds.join(", ")} cancelled because an upstream dependency failed.`
 }
 
-/** The staged op of `kind` targeting `nodeId`, if one is still in the list. */
+/**
+ * The *outstanding* op of `kind` targeting `nodeId`, if one is still in the
+ * list. `done` rows are excluded on purpose: callers use this to decide
+ * "is this still just a staged intention?" — a retained `done` domain join is
+ * a real membership, and treating it as undoable would cascade away a
+ * relationship that exists and skip the explicit leave it needs.
+ */
 export function findStagedOp(
   ops: StagedOp[],
   kind: OpKind,
   nodeId: string,
 ): StagedOp | undefined {
-  return ops.find((op) => op.kind === kind && op.targetNodeId === nodeId)
+  return actionableOps(ops).find(
+    (op) => op.kind === kind && op.targetNodeId === nodeId,
+  )
 }
 
 /**

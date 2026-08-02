@@ -34,6 +34,7 @@ import {
 import {
   OP_KIND,
   OP_STATUS,
+  actionableOps,
   blockedRealizationDetail,
   inferDependsOn,
   isProvisionOpId,
@@ -626,7 +627,22 @@ function revertNonTerminalToStaged(): void {
   })
 }
 
-/** Final reconcile once the plan job reaches `done`: apply the last snapshot, drop fully-`done` ops off the list, and reopen `cancelled` ops (skipped only because a dependency failed) as `staged` so "Retry deploy" resends them alongside the op that actually failed. Exported for tests. */
+/**
+ * Final reconcile once the plan job reaches `done`: apply the last snapshot,
+ * drop fully-`done` ops off the list, and reopen `cancelled` ops (skipped only
+ * because a dependency failed) as `staged` so "Retry deploy" resends them
+ * alongside the op that actually failed.
+ *
+ * A run that ended with a failure keeps its `done` rows instead. Dropping them
+ * left the panel showing one orphaned error row — the deploy's whole context
+ * (which clones landed, which relationships were wired) gone, its number reset
+ * to 1, and its `dependsOn` pointing at ids no longer in the list, so the next
+ * project load would `sanitizeOps` away even that. The rows stay read-only and
+ * are still never re-sent: `deploy()` prunes `done` through `prepareDeployPlan`
+ * at retry time, which is the only moment the distinction matters.
+ *
+ * Exported for tests.
+ */
 export function finishDeploy(
   result: Record<string, unknown>,
   deploymentJobId: string,
@@ -635,6 +651,9 @@ export function finishDeploy(
   applyPlanState(opsResult, deploymentJobId)
 
   const { ops } = useStagingStore.getState()
+  const failed = Object.values(opsResult).some(
+    (state) => state?.status === "error",
+  )
   // A done createVm whose provision sibling failed is retained alongside it —
   // dropping the parent would orphan the synthetic error row, and the pair
   // reads as one failed deployment of the node (teardown is the exit).
@@ -647,7 +666,11 @@ export function finishDeploy(
   const remaining: StagedOp[] = []
   for (const op of ops) {
     const finalState = opsResult[op.id]
-    if (finalState?.status === "done" && !failedProvisionParents.has(op.id))
+    if (
+      finalState?.status === "done" &&
+      !failed &&
+      !failedProvisionParents.has(op.id)
+    )
       continue
     if (finalState?.status === "error") errorCount++
     remaining.push(
@@ -814,6 +837,11 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
     while (index >= 0 && ops[index].synthesized) index--
     if (index < 0) return
     const last = ops[index]
+    // `done` rows retained after a failed run are history, not queue: they
+    // already happened, so `revertOp` would unwind canvas state for a VM that
+    // really exists. Skipping past one to an earlier op would break the
+    // "last op has no dependents" invariant, so undo simply stops here.
+    if (last.status === OP_STATUS.done) return
     revertOp(last)
     set({
       ops: ops.filter(
@@ -899,7 +927,8 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
 
   deploy() {
     const { ops, deploying } = get()
-    if (deploying || ops.length === 0) return
+    // A list of nothing but retained `done` rows has nothing left to send.
+    if (deploying || actionableOps(ops).length === 0) return
 
     // Pre-flight: an enabled-but-empty ISO panel means the operator asked for
     // an authored disc but hasn't provided one — refuse rather than silently

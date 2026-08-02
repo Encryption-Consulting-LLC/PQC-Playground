@@ -1,6 +1,7 @@
 import { useState } from "react"
 
 import { TEMPLATE_CATALOG } from "@/constants/templates"
+import { actionableOps } from "@/lib/staging"
 import { cn } from "@/lib/utils"
 import { useStagingStore } from "@/store/staging"
 import { StagedPanel } from "./StagedPanel"
@@ -18,7 +19,9 @@ const PRODUCT_TEMPLATES = TEMPLATE_CATALOG.filter(
 
 export function Toolbox() {
   const [tab, setTab] = useState<Tab>("templates")
-  const opsCount = useStagingStore((s) => s.ops.length)
+  // Outstanding work only: a failed deploy leaves its succeeded rows listed
+  // for context, and those aren't staged for anything any more.
+  const opsCount = useStagingStore((s) => actionableOps(s.ops).length)
   const deploying = useStagingStore((s) => s.deploying)
 
   return (

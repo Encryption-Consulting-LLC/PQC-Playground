@@ -519,3 +519,95 @@ test("a webServerCert op with no secondary falls back to its target", () => {
     "node-ca2",
   )
 })
+
+test("a failed deploy keeps its succeeded rows for context", () => {
+  issuingCaScenario()
+
+  staging.finishDeploy(
+    {
+      ops: {
+        "op-ca2": { status: "done", result: { vmName: "guest-ca02" } },
+        "op-web": { status: "done", result: { vmName: "guest-srv01" } },
+        "op-join": { status: "done" },
+        "op-connect": { status: "done" },
+        "op-cert": {
+          status: "error",
+          detail: "agent command 'iis.setup_certenroll' timed out after 300s",
+        },
+      },
+    },
+    "job1",
+  )
+
+  const ops = staging.useStagingStore.getState().ops
+  // Every row survives, in order — the failed op keeps its position (5th, not
+  // renumbered to 1) and its dependsOn still resolves inside the list.
+  expect(ops.map((o) => o.id)).toEqual([
+    "op-ca2",
+    "op-web",
+    "op-join",
+    "op-connect",
+    "op-cert",
+  ])
+  expect(ops.map((o) => o.status)).toEqual([
+    "done",
+    "done",
+    "done",
+    "done",
+    "error",
+  ])
+  expect(lib.sanitizeOps(ops).map((o) => o.id)).toEqual(ops.map((o) => o.id))
+  // Only the failure is outstanding.
+  expect(lib.actionableOps(ops).map((o) => o.id)).toEqual(["op-cert"])
+})
+
+test("a clean deploy still empties the list", () => {
+  issuingCaScenario()
+
+  staging.finishDeploy(
+    {
+      ops: {
+        "op-ca2": { status: "done", result: { vmName: "guest-ca02" } },
+        "op-web": { status: "done", result: { vmName: "guest-srv01" } },
+        "op-join": { status: "done" },
+        "op-connect": { status: "done" },
+        "op-cert": { status: "done" },
+      },
+    },
+    "job1",
+  )
+
+  expect(staging.useStagingStore.getState().ops).toEqual([])
+})
+
+test("retained rows are never re-sent and never undone", () => {
+  issuingCaScenario()
+  staging.finishDeploy(
+    {
+      ops: {
+        "op-ca2": { status: "done", result: { vmName: "guest-ca02" } },
+        "op-web": { status: "done", result: { vmName: "guest-srv01" } },
+        "op-join": { status: "done" },
+        "op-connect": { status: "done" },
+        "op-cert": { status: "error", detail: "timed out" },
+      },
+    },
+    "job1",
+  )
+
+  // A retry sends only the failure, with its dropped dependencies pruned.
+  const prepared = staging.prepareDeployPlan()
+  expect(prepared.payload.map((op) => op.id)).toEqual(["op-cert"])
+  expect(prepared.payload[0].dependsOn).toEqual([])
+
+  // Undo stops at the failed row and refuses to walk into the done ones.
+  staging.useStagingStore.getState().undo()
+  expect(staging.useStagingStore.getState().ops.map((o) => o.id)).toEqual([
+    "op-ca2",
+    "op-web",
+    "op-join",
+    "op-connect",
+  ])
+  staging.useStagingStore.getState().undo()
+  expect(staging.useStagingStore.getState().ops).toHaveLength(4)
+})

@@ -22,6 +22,7 @@ import type { LucideIcon } from "lucide-react"
 import {
   OP_KIND,
   OP_STATUS,
+  actionableOps,
   opDestinationNodeId,
   transitiveDependents,
 } from "@/lib/staging"
@@ -367,6 +368,9 @@ export function StagedPanel() {
 
   const hasErrors = ops.some((op) => op.status === OP_STATUS.error)
   const doneCount = ops.filter((op) => op.status === OP_STATUS.done).length
+  // `done` rows survive a failed run for context only — Undo and Deploy act on
+  // what is still outstanding, not on what already happened.
+  const pendingCount = actionableOps(ops).length
   const groups = new Map(
     (preview?.groups ?? []).map((group) => [group.id, group]),
   )
@@ -449,16 +453,21 @@ export function StagedPanel() {
                     </span>
                     <StatusGlyph op={op} />
                     {/* Synthesized rows are read-only — they live and die with
-                        their parent createVm, so no direct remove control. */}
-                    {!deploying && !op.synthesized && (
-                      <button
-                        onClick={() => requestRemove(op)}
-                        className="mt-0.5 shrink-0 text-muted-foreground transition-colors hover:text-red-500"
-                        aria-label={`Remove ${op.label}`}
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    )}
+                        their parent createVm, so no direct remove control. A
+                        `done` row is history retained after a failed run:
+                        removing it would revert canvas state for a VM that
+                        really exists. */}
+                    {!deploying &&
+                      !op.synthesized &&
+                      op.status !== OP_STATUS.done && (
+                        <button
+                          onClick={() => requestRemove(op)}
+                          className="mt-0.5 shrink-0 text-muted-foreground transition-colors hover:text-red-500"
+                          aria-label={`Remove ${op.label}`}
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      )}
                   </div>
                   {isExpanded && (
                     <ol
@@ -533,7 +542,7 @@ export function StagedPanel() {
           variant="outline"
           size="sm"
           className="w-full justify-start gap-2"
-          disabled={deploying || ops.length === 0}
+          disabled={deploying || pendingCount === 0}
           title="Ctrl+Z"
           onClick={handleUndo}
         >
@@ -543,7 +552,7 @@ export function StagedPanel() {
         <Button
           size="sm"
           className="w-full"
-          disabled={ops.length === 0 || deploying || compiling}
+          disabled={pendingCount === 0 || deploying || compiling}
           onClick={handleDeploy}
         >
           {deploying || compiling ? (
@@ -551,12 +560,12 @@ export function StagedPanel() {
               <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
               {compiling ? "Compiling review…" : "Deploying…"}
             </>
-          ) : ops.length === 0 ? (
+          ) : pendingCount === 0 ? (
             "Nothing staged"
           ) : hasErrors ? (
             "Retry deploy"
           ) : (
-            `Deploy (${ops.length})`
+            `Deploy (${pendingCount})`
           )}
         </Button>
       </div>

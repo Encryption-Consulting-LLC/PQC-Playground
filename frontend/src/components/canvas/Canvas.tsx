@@ -29,7 +29,7 @@ import {
   type DomainSyncChange,
 } from "@/store/topology"
 import { opsReferencingNode, useStagingStore } from "@/store/staging"
-import { OP_KIND, type StagedOp } from "@/lib/staging"
+import { OP_KIND, actionableOps, type StagedOp } from "@/lib/staging"
 import { EDGE_TYPE } from "@/constants/topology"
 import {
   domainJoinBlockReason,
@@ -248,15 +248,16 @@ export function Canvas() {
           .getState()
           .edges.find((candidate) => candidate.id === change.id)
         if (!edge) continue
-        const op = useStagingStore
-          .getState()
-          .ops.find(
-            (candidate) =>
-              candidate.edgeId === edge.id ||
-              (candidate.kind === OP_KIND.webServerCert &&
-                candidate.targetNodeId === edge.source &&
-                candidate.secondaryNodeId === edge.target),
-          )
+        // Only the op that still owns this edge unstages with it. A `done` row
+        // retained after a failed run describes work that already happened —
+        // cascading it would unwind canvas state for a real relationship.
+        const op = actionableOps(useStagingStore.getState().ops).find(
+          (candidate) =>
+            candidate.edgeId === edge.id ||
+            (candidate.kind === OP_KIND.webServerCert &&
+              candidate.targetNodeId === edge.source &&
+              candidate.secondaryNodeId === edge.target),
+        )
         if (op) useStagingStore.getState().removeOpCascade(op.id)
       }
       applyEdgeChanges(changes)
