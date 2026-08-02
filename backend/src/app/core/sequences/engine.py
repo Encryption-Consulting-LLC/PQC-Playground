@@ -82,6 +82,25 @@ def _reboot_recovery_signature(step: Step, exc: Exception) -> str | None:
     )
 
 
+def _combined_failure(first: Exception, last: Exception, attempts: int) -> Exception:
+    """The failure to surface after *attempts* dispatches of one step.
+
+    Reporting only the last attempt is wrong whenever the first attempt left
+    state behind that makes every later one fail differently — a self-poisoning
+    command's retries all lie, and the one true error gets discarded. Lead with
+    the first failure and keep its class, so ``core/errors.py``'s status mapping
+    still applies; append the last for context.
+    """
+
+    if str(last) == str(first):
+        return last
+    detail = f"{first} (retried {attempts - 1}x; last: {last})"
+    try:
+        return type(first)(detail)
+    except Exception:  # noqa: BLE001 - an exception class with a richer ctor
+        return last
+
+
 class SequenceEngine:
     def __init__(
         self,
@@ -231,10 +250,14 @@ class SequenceEngine:
         would race the first (two concurrent ``Install-WindowsFeature`` runs).
         The dispatch adapter marks those failures with a ``timed_out``
         attribute; the engine stays transport-agnostic and just reads it.
+
+        What finally surfaces after an exhausted schedule is the *first*
+        attempt's failure, not the last — see ``_combined_failure``.
         """
 
         attempt = 0
         recovered = False
+        first_exc: Exception | None = None
         while True:
             job_key = step.id if attempt == 0 else f"{step.id}.retry.{attempt}"
             try:
@@ -249,6 +272,8 @@ class SequenceEngine:
                     expect_disconnect=step.expects_disconnect,
                 )
             except Exception as exc:  # noqa: BLE001 - transport/agent transient boundary
+                if first_exc is None:
+                    first_exc = exc
                 if getattr(exc, "timed_out", False):
                     logger.warning(
                         "sequence step %s (%s) timed out after %ds; not retrying "
@@ -266,7 +291,9 @@ class SequenceEngine:
                         step, vm_id, params, signature, exc
                     )
                 if attempt >= len(step.retry_delays_s):
-                    raise
+                    if first_exc is exc:
+                        raise
+                    raise _combined_failure(first_exc, exc, attempt + 1) from exc
                 delay = step.retry_delays_s[attempt]
                 attempt += 1
                 logger.warning(

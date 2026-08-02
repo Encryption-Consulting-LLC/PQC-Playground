@@ -723,6 +723,41 @@ def test_retry_policy_reraises_after_final_attempt():
     assert clock.t == 5_000
 
 
+def test_an_exhausted_retry_schedule_surfaces_the_first_failure():
+    """A command that poisons its own retries (the OCSP responder's certutil
+    fetch wrote a fixed path without -f) makes attempts 2..N report a
+    downstream symptom. The first attempt is the one that says what broke."""
+    clock = FakeClock()
+    details = iter(["certutil -ca.cert failed", "the file exists", "the file exists"])
+
+    def dispatch(*_a, **_k):
+        raise SequenceError(next(details))
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    with pytest.raises(SequenceError) as caught:
+        engine.run(
+            [
+                Step(
+                    id="ocsp-config",
+                    command="ocsp.configure_revocation",
+                    target="primary",
+                    retry_delays_s=(5, 5),
+                )
+            ],
+            _ctx(),
+        )
+    detail = str(caught.value)
+    assert detail.startswith("certutil -ca.cert failed")
+    assert "retried 2x" in detail
+    assert "last: the file exists" in detail
+
+
 def test_a_timed_out_step_is_never_redispatched():
     """Giving up on the wait doesn't stop the command on the guest, so a retry
     would race a second Install-WindowsFeature against the first. The retry
