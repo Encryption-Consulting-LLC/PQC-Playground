@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react"
+import { useEffect, useState } from "react"
 import { useMutation } from "@tanstack/react-query"
 import { toast } from "sonner"
 import {
@@ -9,6 +9,7 @@ import {
   type LoginRequest,
   type SessionResponse,
 } from "@/lib/api"
+import { OIDC_CALLBACK } from "@/lib/oidcCallback"
 import { useAuthStore } from "@/store/auth"
 import { Button } from "@/components/ui/button"
 import { FloatingField } from "@/components/ui/floating-field"
@@ -24,6 +25,8 @@ function storeSession(s: SessionResponse) {
     host: s.host,
   })
 }
+
+let exchangeStarted = false
 
 const showError = (err: unknown) =>
   toast.error(err instanceof ApiError ? `${err.status}: ${err.message}` : String(err))
@@ -59,19 +62,15 @@ export function LoginForm() {
     onError: showError,
   })
 
-  // Returning leg of the SSO redirect: the IdP sent the browser back with
-  // ?code&state on our origin. Exchange exactly once, then scrub the params
-  // from the URL so a reload doesn't retry a consumed code.
-  const didExchange = useRef(false)
+  // Returning leg of the SSO redirect. The params were already read off the
+  // URL and scrubbed at module load (see lib/oidcCallback) — all that's left
+  // is to redeem them. The guard is module-scope rather than a ref because a
+  // consumed code must not be replayed by StrictMode's double-invoked effect,
+  // nor by a remount of this component.
   useEffect(() => {
-    if (didExchange.current) return
-    const params = new URLSearchParams(window.location.search)
-    const code = params.get("code")
-    const state = params.get("state")
-    if (!code || !state) return
-    didExchange.current = true
-    window.history.replaceState(null, "", window.location.pathname)
-    ssoFinish.mutate({ code, state })
+    if (!OIDC_CALLBACK || exchangeStarted) return
+    exchangeStarted = true
+    ssoFinish.mutate(OIDC_CALLBACK)
   }, [ssoFinish])
 
   if (ssoFinish.isPending) return <Splash label="Completing SSO sign-in…" />
