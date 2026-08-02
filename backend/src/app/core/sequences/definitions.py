@@ -800,7 +800,7 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
             command="ocsp.configure_revocation",
             target=PRIMARY,
             params={
-                "name": "EC-Issuing-CA",
+                "name": issuing_cn,
                 "caConfig": ca_config,
                 # The responder reads the CA certificate off disk rather than
                 # fetching it with `certutil -ca.cert`: `issuing-to-web` has

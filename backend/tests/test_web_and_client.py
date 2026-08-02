@@ -167,6 +167,8 @@ def test_ocsp_config_points_at_the_issuing_ca():
     assert params["caConfig"] == (
         "guest-abc12-ca02.encon.pki\\EncryptionConsulting Issuing CA"
     )
+    # Named after the CA it answers for, not a hardcoded default.
+    assert params["name"] == "EncryptionConsulting Issuing CA"
     # The relayed copy `issuing-to-web` already wrote — the responder reads
     # the certificate off disk instead of fetching it with certutil.
     assert params["caCertPath"] == (
