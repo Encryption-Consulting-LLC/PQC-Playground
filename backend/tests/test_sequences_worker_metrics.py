@@ -169,35 +169,67 @@ def test_step_persistence_atomically_merges_artifacts_instead_of_replacing_map()
 # --------------------------------------------------------------------------- #
 # load_step_medians / _step_median_seconds                                    #
 # --------------------------------------------------------------------------- #
+def _sample(db, command, step_id, ms, at):
+    db["step_metrics"].insert_one(
+        {"command": command, "stepId": step_id, "durationMs": ms, "at": at}
+    )
+
+
 def test_load_step_medians_takes_the_median_of_recent_runs():
     db = FakeDb()
     for i, ms in enumerate([10_000, 30_000, 20_000]):
-        db["step_metrics"].insert_one(
-            {"command": "dc.install_forest", "durationMs": ms, "at": i}
-        )
-    medians = load_step_medians(db, ["dc.install_forest", "never.ran"])
-    assert medians == {"dc.install_forest": 20_000.0}
+        _sample(db, "dc.install_forest", "install-forest", ms, i)
+    steps = [
+        Step(id="install-forest", command="dc.install_forest", target="primary"),
+        Step(id="never-ran", command="never.ran", target="primary"),
+    ]
+    assert load_step_medians(db, steps) == {"install-forest": 20_000.0}
 
 
 def test_load_step_medians_uses_only_the_newest_sample_window():
     db = FakeDb()
     # 20 old slow runs, then 20 recent fast ones — only the recent window counts.
     for i in range(20):
-        db["step_metrics"].insert_one(
-            {"command": "cmd", "durationMs": 100_000, "at": i}
-        )
+        _sample(db, "cmd", "s1", 100_000, i)
     for i in range(20):
-        db["step_metrics"].insert_one(
-            {"command": "cmd", "durationMs": 5_000, "at": 100 + i}
-        )
-    assert load_step_medians(db, ["cmd"]) == {"cmd": 5_000.0}
+        _sample(db, "cmd", "s1", 5_000, 100 + i)
+    steps = [Step(id="s1", command="cmd", target="primary")]
+    assert load_step_medians(db, steps) == {"s1": 5_000.0}
+
+
+def test_two_steps_sharing_a_command_do_not_share_a_median():
+    """The real failure this keys off: `iis.setup_certenroll` publishes a share
+    in ~20s as `iis-share` and stands up IIS in minutes as `iis-web`. The
+    command-wide median handed `iis-web` the share's 21s estimate, which pinned
+    its progress bar at the 95% cap five minutes into a real run."""
+    db = FakeDb()
+    for i, ms in enumerate([21_777, 40_707, 16_649]):
+        _sample(db, "iis.setup_certenroll", "iis-share", ms, i)
+    _sample(db, "iis.setup_certenroll", "iis-web", 600_000, 10)
+    steps = [
+        Step(id="iis-share", command="iis.setup_certenroll", target="primary"),
+        Step(id="iis-web", command="iis.setup_certenroll", target="primary"),
+    ]
+    assert load_step_medians(db, steps) == {
+        "iis-share": 21_777.0,
+        "iis-web": 600_000.0,
+    }
+
+
+def test_a_step_with_no_samples_falls_back_to_its_command_median():
+    """Metrics are filed under the *job key*, so a step that always takes a
+    retry path (`install-forest` → `install-forest.postreboot`) has no samples
+    under its own id and must still inherit its command's history."""
+    db = FakeDb()
+    for i, ms in enumerate([521_413, 536_388, 559_225]):
+        _sample(db, "dc.install_forest", "install-forest.postreboot", ms, i)
+    steps = [Step(id="install-forest", command="dc.install_forest", target="primary")]
+    assert load_step_medians(db, steps) == {"install-forest": 536_388.0}
 
 
 def test_step_median_seconds_maps_step_ids_and_converts_units():
     db = FakeDb()
-    db["step_metrics"].insert_one(
-        {"command": "dc.install_forest", "durationMs": 480_000, "at": 1}
-    )
+    _sample(db, "dc.install_forest", "install-forest", 480_000, 1)
     steps = [
         Step(id="install-forest", command="dc.install_forest", target="primary"),
         Step(id="reboot", command="system.reboot", target="primary"),

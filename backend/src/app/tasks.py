@@ -1260,14 +1260,13 @@ def _fmt_duration(seconds: float) -> str:
 
 
 def _step_median_seconds(db, steps) -> dict[str, float]:
-    """step_id → median duration (seconds) of past runs of the step's command
-    — the priors behind the estimated intra-step percent. Steps whose command
-    has never completed are absent (their heartbeat shows elapsed time only)."""
+    """step_id → median duration (seconds) of that step's past runs — the priors
+    behind the estimated intra-step percent. Steps with no history (their own or
+    their command's) are absent, and their heartbeat shows elapsed time only."""
     from app.core.sequences.worker import load_step_medians
 
-    medians_ms = load_step_medians(db, [s.command for s in steps])
     return {
-        s.id: medians_ms[s.command] / 1000.0 for s in steps if s.command in medians_ms
+        step_id: ms / 1000.0 for step_id, ms in load_step_medians(db, steps).items()
     }
 
 

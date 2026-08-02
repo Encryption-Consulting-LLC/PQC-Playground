@@ -49,30 +49,60 @@ def _record_step_metric(
         logger.exception("failed to record step metric for %s", command)
 
 
-def load_step_medians(db, commands) -> dict[str, float]:
-    """Median ``durationMs`` of the last ``_STEP_MEDIAN_SAMPLE`` recorded runs
-    per command — the duration priors behind the UI's estimated intra-step
-    percent. Commands with no history are simply absent (first-ever run of a
-    command gets elapsed text only)."""
+def _median_duration_ms(db, query: dict) -> float | None:
+    """Median ``durationMs`` of the newest ``_STEP_MEDIAN_SAMPLE`` matches, or
+    ``None`` when nothing has been recorded (priors are optional — a failed
+    lookup must never fail the run that asked for it)."""
+    try:
+        docs = (
+            db["step_metrics"]
+            .find(query, {"durationMs": 1})
+            .sort("at", -1)
+            .limit(_STEP_MEDIAN_SAMPLE)
+        )
+        values = [
+            d["durationMs"]
+            for d in docs
+            if isinstance(d.get("durationMs"), (int, float))
+        ]
+    except Exception:  # noqa: BLE001 — priors are optional
+        logger.exception("failed to load step medians for %r", query)
+        return None
+    return float(statistics.median(values)) if values else None
+
+
+def load_step_medians(db, steps) -> dict[str, float]:
+    """``step_id -> median durationMs`` of the last ``_STEP_MEDIAN_SAMPLE``
+    recorded runs *of that step* — the duration priors behind the UI's
+    estimated intra-step percent.
+
+    Keyed per step, not per command, because one command can be two very
+    different jobs: ``iis.setup_certenroll`` takes ~20s to publish a share
+    (``iis-share``) and minutes to stand up IIS (``iis-web``), and a
+    command-wide median hands the slow one the fast one's estimate.
+
+    Falls back to the command-wide median for a step with no samples of its
+    own. That fallback is load-bearing rather than cosmetic: metrics are
+    recorded under the *job key*, so a step that always takes a retry path
+    banks its history elsewhere (every ``install-forest`` sample is filed under
+    ``install-forest.postreboot``) and would otherwise look brand new. A
+    command nobody has ever run is simply absent — that step gets elapsed text
+    with no estimate.
+    """
     medians: dict[str, float] = {}
-    for command in set(commands):
-        try:
-            docs = (
-                db["step_metrics"]
-                .find({"command": command}, {"durationMs": 1})
-                .sort("at", -1)
-                .limit(_STEP_MEDIAN_SAMPLE)
-            )
-            values = [
-                d["durationMs"]
-                for d in docs
-                if isinstance(d.get("durationMs"), (int, float))
-            ]
-        except Exception:  # noqa: BLE001 — priors are optional
-            logger.exception("failed to load step medians for %s", command)
+    by_command: dict[str, float | None] = {}
+    for step in steps:
+        step_id, command = step.id, step.command
+        if step_id in medians:
             continue
-        if values:
-            medians[command] = float(statistics.median(values))
+        own = _median_duration_ms(db, {"command": command, "stepId": step_id})
+        if own is not None:
+            medians[step_id] = own
+            continue
+        if command not in by_command:
+            by_command[command] = _median_duration_ms(db, {"command": command})
+        if by_command[command] is not None:
+            medians[step_id] = by_command[command]
     return medians
 
 
