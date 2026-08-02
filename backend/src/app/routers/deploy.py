@@ -45,7 +45,7 @@ from app.core.db import (
     vm_registry_col,
 )
 from app.core.evidence import build_evidence_bundle, redact_evidence
-from app.core.esxi import _target_from_doc, manager
+from app.core.esxi import _target_from_doc, connect_to_target
 from app.core.firstboot import TEMPLATE_IDS
 from app.core.golden_image import (
     golden_image_config_from_doc,
@@ -600,7 +600,7 @@ async def deploy(
     preflight = None
     if create_ops:
         assert target is not None  # validate_plan rejected an unconfigured target
-        conn = await run_in_threadpool(manager.get, target)
+        conn = await connect_to_target(target)
         preflight = await run_in_threadpool(
             partial(
                 preflight_infrastructure,

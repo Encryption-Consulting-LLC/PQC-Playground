@@ -178,27 +178,22 @@ class ConnectionManager:
 manager = ConnectionManager()
 
 
-async def get_esxi(_user: AuthedUser = Depends(get_current_user)) -> Connection:
-    """FastAPI dependency: the shared org-target ``Connection``.
-
-    Authenticated (identity resolution is per-request-cached, so pairing with
-    ``require_capability`` costs nothing extra); 503 until an admin has
-    configured the target.
+async def connect_to_target(target: EsxiTarget) -> Connection:
+    """Open (or reuse) the shared connection to *target*, as an HTTP error.
 
     ESXi connection failures are surfaced as 502 (bad *downstream* gateway),
     **including bad stored ESXi credentials** — an ESXi ``AuthenticationError``
-    is deliberately not mapped to 401 here. 401 is reserved for the caller's own
+    is deliberately never mapped to 401. 401 is reserved for the caller's own
     session being invalid; the frontend auto-logs-out on any 401, so letting an
     ESXi-credential failure reach the client as 401 would kick the signed-in
     admin out mid-edit while they're fixing the target. The detail names the
     real cause either way.
+
+    Every route that reaches for a connection outside the ``get_esxi``
+    dependency goes through this — the deploy preflight used to call
+    ``manager.get`` bare, which is exactly how a rejected ESXi login became a
+    session-ending 401 on a retried deploy.
     """
-    target = await load_target()
-    if target is None:
-        raise HTTPException(
-            status_code=503,
-            detail="No shared ESXi target configured",
-        )
     try:
         return await run_in_threadpool(manager.get, target)
     except AuthenticationError as exc:
@@ -211,3 +206,20 @@ async def get_esxi(_user: AuthedUser = Depends(get_current_user)) -> Connection:
             status_code=502,
             detail=f"Could not reach the configured ESXi target: {exc}",
         ) from exc
+
+
+async def get_esxi(_user: AuthedUser = Depends(get_current_user)) -> Connection:
+    """FastAPI dependency: the shared org-target ``Connection``.
+
+    Authenticated (identity resolution is per-request-cached, so pairing with
+    ``require_capability`` costs nothing extra); 503 until an admin has
+    configured the target, 502 on any connection failure (see
+    :func:`connect_to_target`).
+    """
+    target = await load_target()
+    if target is None:
+        raise HTTPException(
+            status_code=503,
+            detail="No shared ESXi target configured",
+        )
+    return await connect_to_target(target)
