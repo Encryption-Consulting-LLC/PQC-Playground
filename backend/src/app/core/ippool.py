@@ -191,6 +191,28 @@ async def load_guest_network() -> GuestNetwork | None:
     return guest_network_from_doc(doc)
 
 
+async def release_ip_async(vm_name: str) -> None:
+    """API-process mirror of ``release_ip_sync``.
+
+    Used where a registry row is discarded without a worker in the loop —
+    purging a bookkeeping entry for a VM that is already gone. The row is the
+    last thing linking the address to anything, so releasing has to happen
+    before it is deleted or the address is leaked with no way to find it again.
+    """
+    await ip_pool_col().update_many(
+        {"vmName": vm_name},
+        {
+            "$set": {
+                "status": "free",
+                "vmName": None,
+                "jobId": None,
+                "allocatedAt": None,
+                "updatedAt": now_ms(),
+            }
+        },
+    )
+
+
 async def list_pool_async() -> dict[str, Any]:
     """Inspect shape for ``GET /api/ip-pool``."""
     entries = [

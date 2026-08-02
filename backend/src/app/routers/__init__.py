@@ -9,6 +9,7 @@ from fastapi import APIRouter
 
 from app.routers import (
     admin_deployments,
+    admin_teardown,
     admin_users,
     auth,
     config,
@@ -33,6 +34,7 @@ for _router in (
     auth.router,
     admin_users.router,
     admin_deployments.router,
+    admin_teardown.router,
     vm.router,
     deploy.router,
     iso.router,
