@@ -292,6 +292,20 @@ def test_caconnect_trusts_the_root_crl_on_ca02_before_installing_the_cert():
     )
 
 
+def test_caconnect_installs_the_issued_cert_under_the_domain_admin():
+    """Installing the cert publishes to AD, which LocalSystem can't do from a
+    member server — the step carries the same credential the install did."""
+
+    ctx = _full_lab_ctx()
+    step = {s.id: s for s in op_sequence("caConnect", ctx)}["install-issuing-cert"]
+    params = step.resolve_params(ctx)
+
+    assert params["certPath"] == "C:\\Transfer\\IssuingCA.crt"
+    assert params["username"] == "ENCON\\Administrator"
+    assert params["password"] == ctx.nodes["dc"].template_config["domainAdminPassword"]
+    assert step.secret_keys == ("password",)
+
+
 def test_caconnect_recovers_missing_root_artifacts_from_configured_directory():
     ctx = _full_lab_ctx()
     ctx.artifacts.pop("root_cert_filename")
