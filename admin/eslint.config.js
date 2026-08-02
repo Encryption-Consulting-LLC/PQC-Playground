@@ -27,4 +27,12 @@ export default defineConfig([
       'react-refresh/only-export-components': 'off',
     },
   },
+  {
+    // Route modules export the route objects alongside their components by
+    // design — that colocation is the whole point of a code-based route tree.
+    files: ['src/routes.tsx', 'src/router.tsx'],
+    rules: {
+      'react-refresh/only-export-components': 'off',
+    },
+  },
 ])
