@@ -8,6 +8,9 @@ import { InfrastructureSection } from "@/sections/InfrastructureSection"
 import { DeploymentsSection } from "@/sections/DeploymentsSection"
 import { IpPoolSection } from "@/sections/IpPoolSection"
 import { RegistrySection } from "@/sections/RegistrySection"
+import { EnvironmentsPanel } from "@/sections/registry/EnvironmentsPanel"
+import { OrphansPanel } from "@/sections/registry/OrphansPanel"
+import { AllVmsPanel } from "@/sections/registry/AllVmsPanel"
 
 export interface RouterContext {
   /**
@@ -74,10 +77,38 @@ const ipPoolRoute = createRoute({
   component: IpPoolSection,
 })
 
+// A layout, not a leaf: RegistrySection renders the teardown progress card
+// above the tab Outlet, so a running teardown survives a tab change.
 const registryRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/registry",
   component: RegistrySection,
+})
+
+const registryIndexRoute = createRoute({
+  getParentRoute: () => registryRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/registry/environments", replace: true })
+  },
+})
+
+const registryEnvironmentsRoute = createRoute({
+  getParentRoute: () => registryRoute,
+  path: "/environments",
+  component: EnvironmentsPanel,
+})
+
+const registryOrphansRoute = createRoute({
+  getParentRoute: () => registryRoute,
+  path: "/orphans",
+  component: OrphansPanel,
+})
+
+const registryAllRoute = createRoute({
+  getParentRoute: () => registryRoute,
+  path: "/all",
+  component: AllVmsPanel,
 })
 
 export const routeTree = rootRoute.addChildren([
@@ -86,5 +117,10 @@ export const routeTree = rootRoute.addChildren([
   infrastructureRoute,
   deploymentsRoute,
   ipPoolRoute,
-  registryRoute,
+  registryRoute.addChildren([
+    registryIndexRoute,
+    registryEnvironmentsRoute,
+    registryOrphansRoute,
+    registryAllRoute,
+  ]),
 ])
