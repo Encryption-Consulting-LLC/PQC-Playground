@@ -1,11 +1,10 @@
 import { useEffect, useState } from "react"
+import { Link, Outlet, useMatchRoute } from "@tanstack/react-router"
 import { CheckCircle2, CircleAlert, Loader2, ShieldCheck } from "lucide-react"
 import { toast } from "sonner"
 
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Tabs, TabsList, TabsPanel, TabsTab } from "@/components/ui/tabs"
 import {
   getSettings,
@@ -18,37 +17,14 @@ import {
   type ImageQualification,
   type OperatorSettingsUpdate,
 } from "@/lib/api"
+import { InfraFormContext, type FormState } from "./infrastructure/context"
 
-interface FormState {
-  esxiHost: string
-  esxiUser: string
-  esxiPassword: string
-  esxiPort: string
-  cloneBase: string
-  cloneDatastore: string
-  cloneGuestOs: string
-  cloneNetwork: string
-  cloneMaxUsagePct: string
-  guestIpStart: string
-  guestIpEnd: string
-  guestPrefix: string
-  guestGateway: string
-  guestDns1: string
-  guestDns2: string
-  guestDnsSuffix: string
-  profiles: InfrastructureProfile[]
-  hasPassword: boolean
-}
-
-const ROLE_LABELS = {
-  domainController: "Domain controller",
-  rootCa: "Offline root CA",
-  issuingCa: "Issuing CA",
-  webServer: "Web and OCSP server",
-  certsecure: "CertSecure Manager",
-  cbom: "CBOM Secure",
-  codesign: "CodeSign Secure",
-} as const
+const TABS = [
+  { value: "esxi", label: "ESXi target", to: "/infrastructure/esxi" },
+  { value: "network", label: "Guest network", to: "/infrastructure/network" },
+  { value: "image", label: "Golden image", to: "/infrastructure/image" },
+  { value: "roles", label: "Role sizing", to: "/infrastructure/roles" },
+] as const
 
 const DEFAULT_PROFILES: InfrastructureProfile[] = [
   ["domainController", 8, 8192, 60],
@@ -107,8 +83,17 @@ function formatBytes(value: number | null): string {
  * components/SettingsDialog.tsx), split across sub-tabs instead of one long
  * scroll. Same form state, same payload/validation logic; only the layout
  * and token usage changed.
+ *
+ * The four panes are child routes, so each has its own address. This is their
+ * layout and it owns the form, which is what makes tab switching keep every
+ * edit: the component holding `form` never unmounts. It also owns the load
+ * and error states, so a pane never renders against a form the server hasn't
+ * filled in yet, and Save/Validate, which act on all four panes at once.
  */
 export function InfrastructureSection() {
+  const matchRoute = useMatchRoute()
+  const activeTab = TABS.find((tab) => matchRoute({ to: tab.to }))?.value ?? TABS[0].value
+
   const [form, setForm] = useState<FormState>(EMPTY_FORM)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
@@ -384,116 +369,33 @@ export function InfrastructureSection() {
           </CardDescription>
         </CardHeader>
         <CardContent>
-          <Tabs defaultValue="esxi">
-            <TabsList>
-              <TabsTab value="esxi">ESXi target</TabsTab>
-              <TabsTab value="network">Guest network</TabsTab>
-              <TabsTab value="image">Golden image</TabsTab>
-              <TabsTab value="roles">Role sizing</TabsTab>
-            </TabsList>
-
-            <TabsPanel value="esxi" className="mt-(--gap-stack)">
-              <div className="grid gap-(--gap-row) sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="esxi-host">Host</Label>
-                  <Input id="esxi-host" value={form.esxiHost} onChange={(e) => patch("esxiHost", e.target.value)} placeholder="192.168.100.10" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="esxi-port">Port</Label>
-                  <Input id="esxi-port" type="number" min="1" max="65535" value={form.esxiPort} onChange={(e) => patch("esxiPort", e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="esxi-user">Username</Label>
-                  <Input id="esxi-user" value={form.esxiUser} onChange={(e) => patch("esxiUser", e.target.value)} placeholder="root" />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="esxi-password">Password</Label>
-                  <Input id="esxi-password" type="password" value={form.esxiPassword} onChange={(e) => patch("esxiPassword", e.target.value)} placeholder={form.hasPassword ? "Saved — enter to replace" : "Required"} />
-                </div>
-              </div>
-            </TabsPanel>
-
-            <TabsPanel value="network" className="mt-(--gap-stack)">
-              <div className="grid gap-(--gap-row) sm:grid-cols-3">
-                <div className="space-y-1.5"><Label htmlFor="guest-start">IP range start</Label><Input id="guest-start" value={form.guestIpStart} onChange={(e) => patch("guestIpStart", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label htmlFor="guest-end">IP range end</Label><Input id="guest-end" value={form.guestIpEnd} onChange={(e) => patch("guestIpEnd", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label htmlFor="guest-prefix">Prefix</Label><Input id="guest-prefix" type="number" min="1" max="32" value={form.guestPrefix} onChange={(e) => patch("guestPrefix", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label htmlFor="guest-gateway">Gateway</Label><Input id="guest-gateway" value={form.guestGateway} onChange={(e) => patch("guestGateway", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label htmlFor="guest-dns1">Primary DNS</Label><Input id="guest-dns1" value={form.guestDns1} onChange={(e) => patch("guestDns1", e.target.value)} /></div>
-                <div className="space-y-1.5"><Label htmlFor="guest-dns2">Secondary DNS</Label><Input id="guest-dns2" value={form.guestDns2} onChange={(e) => patch("guestDns2", e.target.value)} /></div>
-                <div className="space-y-1.5 sm:col-span-3"><Label htmlFor="guest-suffix">DNS suffix</Label><Input id="guest-suffix" value={form.guestDnsSuffix} onChange={(e) => patch("guestDnsSuffix", e.target.value)} placeholder="encon.pki" /></div>
-              </div>
-              <p className="mt-(--gap-row) text-xs text-muted-foreground">
-                The range is inclusive. Network and broadcast addresses of each /{form.guestPrefix || "24"} subnet
-                it spans (e.g. .0 and .255 on a /24) are skipped and never handed to a VM.
-              </p>
-            </TabsPanel>
-
-            <TabsPanel value="image" className="mt-(--gap-stack)">
-              <div className="grid gap-(--gap-row) sm:grid-cols-2">
-                <div className="space-y-1.5">
-                  <Label htmlFor="clone-base">Datastore image name</Label>
-                  <Input id="clone-base" value={form.cloneBase} onChange={(e) => patch("cloneBase", e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="clone-datastore">Datastore</Label>
-                  <Input id="clone-datastore" value={form.cloneDatastore} onChange={(e) => patch("cloneDatastore", e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="clone-guest-os">Expected VMware guest OS</Label>
-                  <Input id="clone-guest-os" value={form.cloneGuestOs} onChange={(e) => patch("cloneGuestOs", e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="clone-usage">Maximum datastore usage (%)</Label>
-                  <Input id="clone-usage" type="number" min="1" max="100" step="0.1" value={form.cloneMaxUsagePct} onChange={(e) => patch("cloneMaxUsagePct", e.target.value)} />
-                </div>
-              </div>
-            </TabsPanel>
-
-            <TabsPanel value="roles" className="mt-(--gap-stack)">
-              <div className="space-y-(--gap-row)">
-                {form.profiles.map((profile) => (
-                  <div key={profile.role} className="rounded-lg border p-(--pad-card)">
-                    <h4 className="text-xs font-medium">{ROLE_LABELS[profile.role]}</h4>
-                    <div className="mt-(--gap-row) grid gap-(--gap-row) sm:grid-cols-4">
-                      <div className="space-y-1.5 sm:col-span-2"><Label>Image</Label><Input value={profile.base} onChange={(e) => patchProfile(profile.role, "base", e.target.value)} /></div>
-                      <div className="space-y-1.5"><Label>Datastore</Label><Input value={profile.datastore} onChange={(e) => patchProfile(profile.role, "datastore", e.target.value)} /></div>
-                      <div className="space-y-1.5"><Label>Port group</Label><Input value={profile.network} onChange={(e) => patchProfile(profile.role, "network", e.target.value)} /></div>
-                      <div className="space-y-1.5 sm:col-span-2"><Label>VMware guest OS</Label><Input value={profile.expectedGuestOs} onChange={(e) => patchProfile(profile.role, "expectedGuestOs", e.target.value)} /></div>
-                      <div className="space-y-1.5"><Label>vCPU</Label><Input type="number" min="1" value={profile.cpus} onChange={(e) => patchProfile(profile.role, "cpus", e.target.value)} /></div>
-                      <div className="space-y-1.5"><Label>Memory (MiB)</Label><Input type="number" min="1024" step="1024" value={profile.memoryMb} onChange={(e) => patchProfile(profile.role, "memoryMb", e.target.value)} /></div>
-                      <div className="space-y-1.5"><Label>Disk reservation (GiB)</Label><Input type="number" min="32" value={profile.systemDiskGb} onChange={(e) => patchProfile(profile.role, "systemDiskGb", e.target.value)} /></div>
-                      <div className="space-y-1.5"><Label>Usage limit (%)</Label><Input type="number" min="1" max="100" value={profile.maxUsagePct} onChange={(e) => patchProfile(profile.role, "maxUsagePct", e.target.value)} /></div>
-                    </div>
-                    {profile.qualification ? (
-                      <div className="mt-(--gap-row) border-t pt-(--gap-row)">
-                        <div className="grid gap-(--gap-row) sm:grid-cols-3">
-                          <div className="space-y-1.5"><Label>Qualified image revision</Label><Input value={profile.qualification.baseChangeVersion} onChange={(e) => patchQualification(profile.role, "baseChangeVersion", e.target.value)} /></div>
-                          <div className="space-y-1.5"><Label>Windows build</Label><Input type="number" min="26100" value={profile.qualification.windowsBuild} onChange={(e) => patchQualification(profile.role, "windowsBuild", e.target.value)} /></div>
-                          <div className="space-y-1.5"><Label>Runner version</Label><Input value={profile.qualification.runnerVersion} onChange={(e) => patchQualification(profile.role, "runnerVersion", e.target.value)} /></div>
-                          <div className="space-y-1.5 sm:col-span-3"><Label>Agent SHA-256</Label><Input value={profile.qualification.agentSha256} onChange={(e) => patchQualification(profile.role, "agentSha256", e.target.value)} /></div>
-                          <div className="space-y-1.5 sm:col-span-2"><Label>Qualified agent commands</Label><Input value={profile.qualification.agentCommands.join(", ")} onChange={(e) => patchQualification(profile.role, "agentCommands", e.target.value.split(",").map((item) => item.trim()).filter(Boolean))} /></div>
-                          <div className="space-y-1.5"><Label>Publication manifest version</Label><Input type="number" min="1" value={profile.qualification.publicationManifestVersion} onChange={(e) => patchQualification(profile.role, "publicationManifestVersion", Number(e.target.value))} /></div>
-                          {profile.role === "webServer" && <div className="space-y-1.5 sm:col-span-3"><Label>OCSP reference dump SHA-256</Label><Input value={profile.qualification.ocspReferenceSha256 ?? ""} onChange={(e) => patchQualification(profile.role, "ocspReferenceSha256", e.target.value || null)} /></div>}
-                        </div>
-                        <div className="mt-(--gap-row) flex flex-wrap gap-(--gap-stack) text-xs text-muted-foreground">
-                          <label className="flex items-center gap-(--gap-inline)"><input type="checkbox" checked={profile.qualification.systemContextValidated} onChange={(e) => patchQualification(profile.role, "systemContextValidated", e.target.checked)} /> SYSTEM operations validated</label>
-                          <label className="flex items-center gap-(--gap-inline)"><input type="checkbox" checked={profile.qualification.timeSynchronized} onChange={(e) => patchQualification(profile.role, "timeSynchronized", e.target.checked)} /> Time synchronized</label>
-                          <label className="flex items-center gap-(--gap-inline)"><input type="checkbox" checked={profile.qualification.windowsUpdatesCurrent} onChange={(e) => patchQualification(profile.role, "windowsUpdatesCurrent", e.target.checked)} /> Windows updates current</label>
-                          <label className="flex items-center gap-(--gap-inline)"><input type="checkbox" checked={profile.qualification.backendCallbackReachable} onChange={(e) => patchQualification(profile.role, "backendCallbackReachable", e.target.checked)} /> Backend callback reached</label>
-                          {(profile.role === "rootCa" || profile.role === "issuingCa") && <label className="flex items-center gap-(--gap-inline)"><input type="checkbox" checked={profile.qualification.mlDsa87Available} onChange={(e) => patchQualification(profile.role, "mlDsa87Available", e.target.checked)} /> ML-DSA-87 provider validated</label>}
-                        </div>
-                      </div>
-                    ) : (
-                      <Button className="mt-(--gap-row)" variant="outline" size="sm" onClick={() => addQualification(profile.role)}>
-                        Add canary qualification
-                      </Button>
-                    )}
-                  </div>
+          {/* The provider only has to sit above the Outlet — the four panes
+              are its only consumers. */}
+          <InfraFormContext
+            value={{ form, patch, patchProfile, patchQualification, addQualification }}
+          >
+            <Tabs value={activeTab}>
+              <TabsList>
+                {TABS.map((tab) => (
+                  // Real anchors, so a pane is middle-clickable and linkable.
+                  <TabsTab
+                    key={tab.value}
+                    value={tab.value}
+                    nativeButton={false}
+                    render={<Link to={tab.to} />}
+                  >
+                    {tab.label}
+                  </TabsTab>
                 ))}
-              </div>
-            </TabsPanel>
-          </Tabs>
+              </TabsList>
+
+              {/* One panel, always valued at the active tab, so Base UI still
+                  wires role="tabpanel" and aria-labelledby to a real tab. */}
+              <TabsPanel value={activeTab} className="mt-(--gap-stack)">
+                <Outlet />
+              </TabsPanel>
+            </Tabs>
+          </InfraFormContext>
         </CardContent>
       </Card>
 

@@ -5,6 +5,10 @@ import { FileQuestion } from "lucide-react"
 import { AppShell } from "@/components/AppShell"
 import { UsersSection } from "@/sections/UsersSection"
 import { InfrastructureSection } from "@/sections/InfrastructureSection"
+import { EsxiPane } from "@/sections/infrastructure/EsxiPane"
+import { NetworkPane } from "@/sections/infrastructure/NetworkPane"
+import { ImagePane } from "@/sections/infrastructure/ImagePane"
+import { RolesPane } from "@/sections/infrastructure/RolesPane"
 import { DeploymentsSection } from "@/sections/DeploymentsSection"
 import { IpPoolSection } from "@/sections/IpPoolSection"
 import { RegistrySection } from "@/sections/RegistrySection"
@@ -59,10 +63,44 @@ const accountsRoute = createRoute({
   component: UsersSection,
 })
 
+// A layout, not a leaf: InfrastructureSection owns the form the four panes
+// edit, so switching panes keeps every unsaved change.
 const infrastructureRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: "/infrastructure",
   component: InfrastructureSection,
+})
+
+const infrastructureIndexRoute = createRoute({
+  getParentRoute: () => infrastructureRoute,
+  path: "/",
+  beforeLoad: () => {
+    throw redirect({ to: "/infrastructure/esxi", replace: true })
+  },
+})
+
+const infrastructureEsxiRoute = createRoute({
+  getParentRoute: () => infrastructureRoute,
+  path: "/esxi",
+  component: EsxiPane,
+})
+
+const infrastructureNetworkRoute = createRoute({
+  getParentRoute: () => infrastructureRoute,
+  path: "/network",
+  component: NetworkPane,
+})
+
+const infrastructureImageRoute = createRoute({
+  getParentRoute: () => infrastructureRoute,
+  path: "/image",
+  component: ImagePane,
+})
+
+const infrastructureRolesRoute = createRoute({
+  getParentRoute: () => infrastructureRoute,
+  path: "/roles",
+  component: RolesPane,
 })
 
 const deploymentsRoute = createRoute({
@@ -114,7 +152,13 @@ const registryAllRoute = createRoute({
 export const routeTree = rootRoute.addChildren([
   indexRoute,
   accountsRoute,
-  infrastructureRoute,
+  infrastructureRoute.addChildren([
+    infrastructureIndexRoute,
+    infrastructureEsxiRoute,
+    infrastructureNetworkRoute,
+    infrastructureImageRoute,
+    infrastructureRolesRoute,
+  ]),
   deploymentsRoute,
   ipPoolRoute,
   registryRoute.addChildren([
