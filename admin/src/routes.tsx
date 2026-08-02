@@ -131,9 +131,22 @@ const registryIndexRoute = createRoute({
   },
 })
 
+/**
+ * A hand-edited URL is untrusted input, so the expanded set is capped. Env
+ * keys are `ungrouped` or `user:<name>|<code>` — they carry `|` and `:` but
+ * never a comma, so comma-joining them stays unambiguous.
+ */
+const MAX_EXPANDED = 25
+
 const registryEnvironmentsRoute = createRoute({
   getParentRoute: () => registryRoute,
   path: "/environments",
+  validateSearch: (search: Record<string, unknown>): { expanded?: string } => {
+    const raw = typeof search.expanded === "string" ? search.expanded : ""
+    const keys = [...new Set(raw.split(",").filter(Boolean))].slice(0, MAX_EXPANDED)
+    // Omitted rather than empty, so a collapsed table has a clean URL.
+    return keys.length ? { expanded: keys.join(",") } : {}
+  },
   component: EnvironmentsPanel,
 })
 
@@ -146,6 +159,10 @@ const registryOrphansRoute = createRoute({
 const registryAllRoute = createRoute({
   getParentRoute: () => registryRoute,
   path: "/all",
+  validateSearch: (search: Record<string, unknown>): { q?: string } => {
+    const q = typeof search.q === "string" ? search.q.slice(0, 200) : ""
+    return q ? { q } : {}
+  },
   component: AllVmsPanel,
 })
 

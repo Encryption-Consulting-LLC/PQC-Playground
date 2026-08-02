@@ -1,5 +1,6 @@
-import { useState } from "react"
+import { useMemo, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
+import { getRouteApi } from "@tanstack/react-router"
 import { ChevronDown, ChevronRight, Loader2, ServerCrash, Trash2 } from "lucide-react"
 
 import { QUERY_KEYS } from "@/constants"
@@ -18,6 +19,10 @@ import {
 import { useTeardownStore } from "@/store/teardown"
 import { TeardownConfirmDialog } from "./TeardownConfirmDialog"
 import { EsxiUnreachableBanner } from "./EsxiUnreachableBanner"
+
+// Fetched by id rather than importing the route object: routes.tsx imports
+// this module, so importing it back would be a cycle.
+const route = getRouteApi("/registry/environments")
 
 const UNGROUPED = "ungrouped"
 
@@ -50,7 +55,17 @@ export function EnvironmentsPanel() {
     refetchInterval: 10_000,
   })
 
-  const [expanded, setExpanded] = useState<Set<string>>(new Set())
+  // Which rows are open lives in the URL, so "look at this lab" is a link and
+  // a refetch-triggering reload doesn't collapse the table. `target` stays
+  // local — that's a dialog, and a pasted link must not arrive with a destroy
+  // confirmation already open.
+  const { expanded: expandedParam } = route.useSearch()
+  const navigate = route.useNavigate()
+  const expanded = useMemo(
+    () => new Set(expandedParam ? expandedParam.split(",") : []),
+    [expandedParam],
+  )
+
   const [target, setTarget] = useState<Target | null>(null)
   const job = useTeardownStore((s) => s.job)
   const startJob = useTeardownStore((s) => s.start)
@@ -76,13 +91,16 @@ export function EnvironmentsPanel() {
     },
   })
 
-  const toggle = (key: string) =>
-    setExpanded((prev) => {
-      const next = new Set(prev)
-      if (next.has(key)) next.delete(key)
-      else next.add(key)
-      return next
+  // `replace` so expanding six rows costs one Back press, not six.
+  const toggle = (key: string) => {
+    const next = new Set(expanded)
+    if (next.has(key)) next.delete(key)
+    else next.add(key)
+    void navigate({
+      search: { expanded: next.size ? [...next].join(",") : undefined },
+      replace: true,
     })
+  }
 
   return (
     <div className="space-y-(--gap-row)">
