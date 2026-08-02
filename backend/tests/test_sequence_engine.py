@@ -723,6 +723,45 @@ def test_retry_policy_reraises_after_final_attempt():
     assert clock.t == 5_000
 
 
+def test_a_timed_out_step_is_never_redispatched():
+    """Giving up on the wait doesn't stop the command on the guest, so a retry
+    would race a second Install-WindowsFeature against the first. The retry
+    schedule covers transient *failures*, not timeouts."""
+    clock = FakeClock()
+    keys = []
+
+    # The engine stays transport-agnostic: it reads the adapter's `timed_out`
+    # marker, which agentbus.DispatchTimeout carries.
+    class Timeout(SequenceError):
+        timed_out = True
+
+    def dispatch(job_key, *_args, **_kwargs):
+        keys.append(job_key)
+        raise Timeout("agent command 'iis.setup_certenroll' timed out after 1800s")
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    with pytest.raises(SequenceError, match="timed out"):
+        engine.run(
+            [
+                Step(
+                    id="iis-web",
+                    command="iis.setup_certenroll",
+                    target="primary",
+                    retry_delays_s=(10, 20),
+                )
+            ],
+            _ctx(),
+        )
+    assert keys == ["iis-web"]
+    assert clock.t == 0
+
+
 def test_cancellation_stops_between_steps_without_interrupting_dispatch():
     clock = FakeClock()
     commands = []

@@ -225,6 +225,12 @@ class SequenceEngine:
         because it has a restart pending, which no amount of redispatching on the
         same boot can clear. That recovery is one-shot and independent of
         ``retry_delays_s`` (which covers transient service failures).
+
+        A *timeout* is never retried, whatever the schedule says: giving up on
+        the wait doesn't stop the command on the guest, so a second dispatch
+        would race the first (two concurrent ``Install-WindowsFeature`` runs).
+        The dispatch adapter marks those failures with a ``timed_out``
+        attribute; the engine stays transport-agnostic and just reads it.
         """
 
         attempt = 0
@@ -243,6 +249,16 @@ class SequenceEngine:
                     expect_disconnect=step.expects_disconnect,
                 )
             except Exception as exc:  # noqa: BLE001 - transport/agent transient boundary
+                if getattr(exc, "timed_out", False):
+                    logger.warning(
+                        "sequence step %s (%s) timed out after %ds; not retrying "
+                        "— the command may still be running on %s",
+                        step.id,
+                        step.command,
+                        step.timeout_s,
+                        vm_id,
+                    )
+                    raise
                 signature = _reboot_recovery_signature(step, exc)
                 if signature is not None and not recovered:
                     recovered = True

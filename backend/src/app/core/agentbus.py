@@ -68,6 +68,19 @@ class DispatchError(Exception):
     """The dispatched command failed terminally, or the wait timed out."""
 
 
+class DispatchTimeout(DispatchError):
+    """The agent never relayed a terminal frame within the step's budget.
+
+    Distinct from a plain error frame because the command is very likely *still
+    running* on the guest — a slow ``Install-WindowsFeature`` does not stop when
+    we give up waiting. Redispatching would race a second invocation against the
+    first, so this failure must not be retried.
+    """
+
+    #: Duck-typed marker read by the (transport-agnostic) sequence engine.
+    timed_out = True
+
+
 class ReconnectTimeoutError(Exception):
     """The agent did not phone home again within the reboot-wait window."""
 
@@ -189,7 +202,7 @@ def dispatch_and_wait(
             raise DispatchError(
                 f"agent command '{command}' failed: {payload.get('detail', 'unknown error')}"
             )
-        raise DispatchError(f"agent command '{command}' timed out after {timeout_s}s")
+        raise DispatchTimeout(f"agent command '{command}' timed out after {timeout_s}s")
     finally:
         pubsub.close()
 

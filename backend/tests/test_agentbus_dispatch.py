@@ -7,6 +7,8 @@ the callback raises), and the following ``done`` frame still resolves the call.
 
 import json
 
+import pytest
+
 from app.core import agentbus
 
 
@@ -97,6 +99,24 @@ def test_progress_frames_without_a_callback_are_still_skipped():
         ]
     )
     assert result == {}
+
+
+def test_a_wait_that_runs_out_raises_the_non_retryable_timeout():
+    """A timeout is its own exception, not a plain DispatchError: the command is
+    probably still running on the guest, so the sequence engine must not
+    redispatch it (it reads the `timed_out` marker)."""
+    with pytest.raises(agentbus.DispatchTimeout, match="timed out after 0s"):
+        agentbus.dispatch_and_wait(
+            "vm-1",
+            "iis.setup_certenroll",
+            {},
+            job_id="job-timeout",
+            role="operator",
+            timeout_s=0,
+            client=_FakeRedis([]),
+        )
+    assert agentbus.DispatchTimeout.timed_out is True
+    assert issubclass(agentbus.DispatchTimeout, agentbus.DispatchError)
 
 
 def test_dispatch_waits_through_the_agents_maximum_reconnect_backoff():
