@@ -496,3 +496,26 @@ test("finishDeploy drops synthetic rows alongside their successful parents", () 
   expect(staging.useStagingStore.getState().ops).toEqual([])
   expect(staging.useStagingStore.getState().deploying).toBe(false)
 })
+
+test("a webServerCert op's destination is the web host, not the CA it targets", () => {
+  issuingCaScenario()
+  const ops = staging.useStagingStore.getState().ops
+  const byId = (id: string) => ops.find((op) => op.id === id)!
+
+  // The panel subtitle reads this: "Configure PKI services on srv01" used to
+  // sit above a grey "ca02" because the op targets the issuing CA.
+  expect(lib.opDestinationNodeId(byId("op-cert"))).toBe("node-web")
+  expect(lib.opDestinationNodeId(byId("op-connect"))).toBe("node-ca2")
+  expect(lib.opDestinationNodeId(byId("op-join"))).toBe("node-ca2")
+  expect(lib.opDestinationNodeId(byId("op-ca2"))).toBe("node-ca2")
+})
+
+test("a webServerCert op with no secondary falls back to its target", () => {
+  issuingCaScenario()
+  const op = staging.useStagingStore
+    .getState()
+    .ops.find((o) => o.id === "op-cert")!
+  expect(lib.opDestinationNodeId({ ...op, secondaryNodeId: undefined })).toBe(
+    "node-ca2",
+  )
+})

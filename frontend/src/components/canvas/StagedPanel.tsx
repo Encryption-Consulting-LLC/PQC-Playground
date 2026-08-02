@@ -19,7 +19,12 @@ import {
 } from "lucide-react"
 import type { LucideIcon } from "lucide-react"
 
-import { OP_KIND, OP_STATUS, transitiveDependents } from "@/lib/staging"
+import {
+  OP_KIND,
+  OP_STATUS,
+  opDestinationNodeId,
+  transitiveDependents,
+} from "@/lib/staging"
 import type { StagedOp } from "@/lib/staging"
 import {
   compileDeployPlan,
@@ -367,10 +372,14 @@ export function StagedPanel() {
   )
 
   function subtitle(op: StagedOp, group?: CompiledExecutionGroup) {
-    const destination = nodeName(op.targetNodeId)
-    return group?.sourceBase
-      ? `${group.sourceBase} → ${destination}`
-      : destination
+    // The destination is whichever node the title names, which for a
+    // webServerCert is the `secondary` web host, not the issuing CA it targets.
+    const destinationId = opDestinationNodeId(op)
+    const destination = nodeName(destinationId)
+    const source =
+      group?.sourceBase ??
+      (destinationId === op.targetNodeId ? null : nodeName(op.targetNodeId))
+    return source ? `${source} → ${destination}` : destination
   }
 
   return (

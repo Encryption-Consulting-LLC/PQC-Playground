@@ -169,6 +169,18 @@ export function nodeRealizationOps(
 }
 
 /**
+ * The node an op's label names — the one it ultimately configures. Same
+ * inversion `nodeRealizationOps` encodes: a `webServerCert` op *targets* the
+ * issuing CA (that's whose certificate service it draws on) but realizes its
+ * `secondary` web host, which is what the compiled label says it configures.
+ */
+export function opDestinationNodeId(op: StagedOp): string {
+  return op.kind === OP_KIND.webServerCert
+    ? (op.secondaryNodeId ?? op.targetNodeId)
+    : op.targetNodeId
+}
+
+/**
  * True while `nodeId` still has plan work in flight (or terminally failed/
  * cancelled) that gates its `deployed` promotion — its synthesized provision
  * op plus every realization op. Agent presence alone must never promote such
