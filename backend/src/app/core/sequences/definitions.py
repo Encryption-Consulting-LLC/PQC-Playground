@@ -802,6 +802,13 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
             params={
                 "name": "EC-Issuing-CA",
                 "caConfig": ca_config,
+                # The responder reads the CA certificate off disk rather than
+                # fetching it with `certutil -ca.cert`: `issuing-to-web` has
+                # already relayed it here, and the fetch it replaces was
+                # single-use per VM (fixed output path, no `-f`).
+                "caCertPath": (
+                    f"{_WEB_CERTENROLL}\\{_observed_filename(ctx, _A_ISSUING_CERT_FILE)}"
+                ),
                 "template": "OCSPResponseSigning",
                 "refreshMinutes": refresh,
                 "baseCrlUrls": (
