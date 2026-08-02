@@ -191,11 +191,23 @@ async def resolve_user_token(token: str | None) -> AuthedUser | None:
     )
 
 
+#: Marks the one 401 that means "the token you sent is no good". The frontend
+#: clears its stored session on this header alone, so a 401 raised for any other
+#: reason (a rejected login attempt, an SSO exchange) leaves the caller signed
+#: in. Blanket "any 401 logs you out" is what let unrelated failures end a
+#: session mid-deploy.
+SESSION_REJECTED_HEADERS = {"WWW-Authenticate": "Session"}
+
+
 async def get_current_user(x_session_token: str = Header(...)) -> AuthedUser:
     """FastAPI dependency: resolve X-Session-Token → AuthedUser (401 if invalid)."""
     user = await resolve_user_token(x_session_token)
     if user is None:
-        raise HTTPException(status_code=401, detail="Invalid or expired session token.")
+        raise HTTPException(
+            status_code=401,
+            detail="Invalid or expired session token.",
+            headers=SESSION_REJECTED_HEADERS,
+        )
     return user
 
 

@@ -7,8 +7,9 @@
  *
  * Token injection: if an active session exists in the auth store, the
  * `X-Session-Token` header is added to every request automatically.
- * On a 401 response while a token is present, the store is cleared so the
- * UI returns to the login form (handles backend restart / expired sessions).
+ * When the backend rejects that token the store is cleared so the UI returns
+ * to the login form (handles backend restart / expired sessions) — see
+ * `clearSessionIfRejected` for why that is narrower than "any 401".
  */
 
 import { API_BASE, URLS, type Capability } from "@/constants"
@@ -25,6 +26,21 @@ export class ApiError extends Error {
     this.status = status
     this.detail = detail
   }
+}
+
+/**
+ * Auto-logout, but only when the 401 is about *our* session.
+ *
+ * `get_current_user` is the single place the backend rejects a session token,
+ * and it marks that 401 with `WWW-Authenticate: Session`. Everything else that
+ * can 401 — a rejected sign-in, an SSO code exchange, or (until it was fixed)
+ * a failed downstream ESXi login on the deploy preflight — is not about the
+ * caller's session, and clearing on those logged operators out mid-deploy.
+ */
+function clearSessionIfRejected(res: Response) {
+  if (res.status !== 401) return
+  if (!res.headers.get("www-authenticate")?.startsWith("Session")) return
+  if (useAuthStore.getState().token) useAuthStore.getState().clear()
 }
 
 interface StructuredErrorDetail {
@@ -73,11 +89,7 @@ async function request<T>(
   })
 
   if (!res.ok) {
-    // Auto-logout: if the server rejects our token, clear it so the UI gates
-    // back to the login form rather than showing the authenticated shell.
-    if (res.status === 401 && useAuthStore.getState().token) {
-      useAuthStore.getState().clear()
-    }
+    clearSessionIfRejected(res)
 
     // FastAPI/Pydantic errors come back as JSON `{ detail: ... }`.
     let message = `${res.status} ${res.statusText}`
@@ -602,7 +614,7 @@ export async function downloadDeployEvidence(
     headers: token ? { "x-session-token": token } : {},
   })
   if (!res.ok) {
-    if (res.status === 401 && token) useAuthStore.getState().clear()
+    clearSessionIfRejected(res)
     let message = `${res.status} ${res.statusText}`
     try {
       const body = await res.json()
@@ -653,9 +665,7 @@ export async function uploadIso(file: File): Promise<UploadedIso> {
   })
 
   if (!res.ok) {
-    if (res.status === 401 && useAuthStore.getState().token) {
-      useAuthStore.getState().clear()
-    }
+    clearSessionIfRejected(res)
     let message = `${res.status} ${res.statusText}`
     try {
       const errBody = await res.json()
