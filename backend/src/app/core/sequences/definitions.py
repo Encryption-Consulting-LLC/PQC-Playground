@@ -960,6 +960,17 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
         )
         return {k: v for k, v in cfg.items() if v not in (None, "")}
 
+    def issuing_cert_install_params(rt: StepRuntime) -> dict[str, str]:
+        dc = ctx.nodes.get(DC)
+        params = {
+            "certPath": _ISSUING_CRT,
+            "username": _admin_username(ctx.netbios),
+            "password": (
+                dc.template_config.get("domainAdminPassword", "") if dc else ""
+            ),
+        }
+        return {k: v for k, v in params.items() if v not in (None, "")}
+
     def issuing_settings_params(rt: StepRuntime) -> dict[str, str]:
         return {
             "crlPeriodUnits": "1",
@@ -1213,11 +1224,17 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
             params={"path": _ISSUING_CRT},
             consumes=(_A_ISSUING_CRT,),
         ),
+        # Installing the signed cert is a *second* AD write, not just a local
+        # one: it publishes into NTAuthCertificates and the AIA / Enrollment
+        # Services objects. LocalSystem on a member server authenticates there
+        # as CA02$ and gets 0x80070005, so this carries the same domain-admin
+        # credential the install above did.
         Step(
             id="install-issuing-cert",
             command="ca.install_cert",
             target=PRIMARY,
-            params={"certPath": _ISSUING_CRT},
+            params=issuing_cert_install_params,
+            secret_keys=("password",),
             verify=_ca_verify_step(),
             verify_predicate=lambda r: r.get("ping_ok") is True,
         ),
