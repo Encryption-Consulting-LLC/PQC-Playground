@@ -63,6 +63,21 @@ _ENROLL_RETRY = (10, 20, 40, 60, 90)
 _CRL_RETRY = (10, 20, 40, 60)
 _OCSP_RETRY = (10, 20, 40, 60, 90)
 
+# Step duration tiers, sized against observed ``step_metrics`` on the deployment
+# host — an ADCS CA install there runs 15-24 minutes, so these are deliberately
+# generous. A Windows *role change* (Install/Uninstall-WindowsFeature, a
+# promotion cmdlet) takes the long tier, an ADCS CA install the longest, and
+# multi-cmdlet service configuration the medium one. Everything else keeps the
+# 300s ``Step`` default, which covers a single cmdlet or a read-only probe.
+#
+# Role-change steps carry no ``retry_delays_s`` on purpose: a timeout does not
+# stop the command on the guest, so redispatching would race a second
+# Install-WindowsFeature against the first. One long attempt, then fail.
+_CA_INSTALL_S = 2700
+_ROLE_CHANGE_S = 1800
+_SERVICE_OP_S = 900
+_REBOOT_S = 1200
+
 # ``Install-ADDSForest``'s prerequisite refusal when the box has a restart
 # pending — the locale-independent error id first, then the English message text
 # it ships with as a fallback.
@@ -319,7 +334,7 @@ def _root_ca_provision() -> list[Step]:
             params=_ca_install_params,
             verify=_ca_verify_step(),
             verify_predicate=lambda r: r.get("ping_ok") is True,
-            timeout_s=1800,
+            timeout_s=_CA_INSTALL_S,
         ),
         Step(
             id="ca-settings",
@@ -399,7 +414,7 @@ def _domain_controller_provision(*, include_dns: bool = False) -> list[Step]:
             target=PRIMARY,
             params=forest_params,
             secret_keys=("safeModePassword",),
-            timeout_s=1800,
+            timeout_s=_ROLE_CHANGE_S,
             reboot_recovery_signatures=_DCPROMO_REBOOT_PENDING,
         ),
         Step(
@@ -407,7 +422,7 @@ def _domain_controller_provision(*, include_dns: bool = False) -> list[Step]:
             command="system.reboot",
             target=PRIMARY,
             expects_disconnect=True,
-            timeout_s=1200,
+            timeout_s=_REBOOT_S,
         ),
         Step(
             id="dns-self",
@@ -524,7 +539,7 @@ def _domain_join_sequence(ctx: RunContext) -> list[Step]:
             command="system.reboot",
             target=PRIMARY,
             expects_disconnect=True,
-            timeout_s=1200,
+            timeout_s=_REBOOT_S,
             verify=Step(id="domain-verify", command="domain.verify", target=PRIMARY),
             verify_predicate=lambda r: r.get("part_of_domain") is True,
             verify_window_s=600,
@@ -566,6 +581,7 @@ def _domain_join_sequence(ctx: RunContext) -> list[Step]:
                         "certEnrollPath", "C:\\CertEnroll"
                     ),
                 },
+                timeout_s=_ROLE_CHANGE_S,
             )
         )
 
@@ -592,6 +608,7 @@ def _domain_join_sequence(ctx: RunContext) -> list[Step]:
                 ),
                 verify_predicate=lambda r: r.get("chain_ok") is True,
                 verify_window_s=900,
+                timeout_s=_SERVICE_OP_S,
                 retry_delays_s=_ENROLL_RETRY,
             )
         )
@@ -624,7 +641,7 @@ def _domain_leave_sequence(ctx: RunContext) -> list[Step]:
             command="system.reboot",
             target=PRIMARY,
             expects_disconnect=True,
-            timeout_s=1200,
+            timeout_s=_REBOOT_S,
             verify=Step(id="domain-verify", command="domain.verify", target=PRIMARY),
             verify_predicate=lambda result: result.get("part_of_domain") is False,
             verify_window_s=600,
@@ -664,12 +681,14 @@ def teardown_action_sequence(kind: str, ctx: RunContext) -> list[Step]:
                 id="ocsp-remove",
                 command="ocsp.remove",
                 target=PRIMARY,
+                timeout_s=_ROLE_CHANGE_S,
                 retry_delays_s=_OCSP_RETRY,
             ),
             Step(
                 id="iis-remove",
                 command="iis.remove_certenroll",
                 target=PRIMARY,
+                timeout_s=_ROLE_CHANGE_S,
                 retry_delays_s=_AD_RETRY,
             ),
         ]
@@ -679,6 +698,7 @@ def teardown_action_sequence(kind: str, ctx: RunContext) -> list[Step]:
                 id="ca-uninstall",
                 command="ca.uninstall",
                 target=PRIMARY,
+                timeout_s=_ROLE_CHANGE_S,
                 retry_delays_s=_AD_RETRY,
             )
         ]
@@ -711,7 +731,7 @@ def teardown_action_sequence(kind: str, ctx: RunContext) -> list[Step]:
                 target=PRIMARY,
                 params={"localAdminPassword": password},
                 secret_keys=("localAdminPassword",),
-                timeout_s=1800,
+                timeout_s=_ROLE_CHANGE_S,
                 retry_delays_s=_AD_RETRY,
             )
         ]
@@ -754,12 +774,13 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
                 "scope": "web",
                 "path": rt.node.template_config.get("certEnrollPath", "C:\\CertEnroll"),
             },
+            timeout_s=_ROLE_CHANGE_S,
         ),
         Step(
             id="ocsp-install",
             command="ocsp.install",
             target=PRIMARY,
-            timeout_s=900,
+            timeout_s=_ROLE_CHANGE_S,
             retry_delays_s=_OCSP_RETRY,
         ),
         Step(
@@ -770,6 +791,7 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
                 "template": "OCSPResponseSigning",
                 "refreshPolicy": "true",
             },
+            timeout_s=_SERVICE_OP_S,
             verify_window_s=900,
             retry_delays_s=_ENROLL_RETRY,
         ),
@@ -837,7 +859,7 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
                 "exportPath": "C:\\Transfer\\lab-health-probe.cer",
                 "refreshPolicy": "true",
             },
-            timeout_s=900,
+            timeout_s=_SERVICE_OP_S,
             retry_delays_s=_ENROLL_RETRY,
         )
     )
@@ -876,7 +898,7 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
                 "issuingPath": f"{_WEB_CERTENROLL}\\{issuing_cert_name}",
                 "expectedSignatureOid": ML_DSA_87_SIGNATURE_OID,
             },
-            timeout_s=900,
+            timeout_s=_SERVICE_OP_S,
         ),
         Step(
             id="enterprise-pki-health",
@@ -1220,7 +1242,7 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
             target=PRIMARY,
             params=issuing_install_params,
             secret_keys=("password",),
-            timeout_s=1800,
+            timeout_s=_CA_INSTALL_S,
         ),
         Step(
             id="read-csr",
@@ -1269,6 +1291,7 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
             secret_keys=("password",),
             verify=_ca_verify_step(),
             verify_predicate=lambda r: r.get("ping_ok") is True,
+            timeout_s=_SERVICE_OP_S,
         ),
     ]
 

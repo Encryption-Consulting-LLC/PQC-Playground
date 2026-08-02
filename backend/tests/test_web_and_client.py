@@ -10,7 +10,10 @@ os.environ.setdefault(
     "SETTINGS_ENC_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 )
 
-from app.core.sequences.definitions import op_sequence  # noqa: E402
+from app.core.sequences.definitions import (  # noqa: E402
+    op_sequence,
+    teardown_action_sequence,
+)
 from app.core.sequences.model import DnsRecordContext, NodeContext, RunContext  # noqa: E402
 from app.core.sequences.model import Step  # noqa: E402
 from app.tasks import _run_sequence_op  # noqa: E402
@@ -122,6 +125,39 @@ def test_web_iis_step_is_the_web_half():
     ctx = _web_ctx()
     iis = op_sequence("webServerCert", ctx)[0]
     assert iis.resolve_params(ctx)["scope"] == "web"
+
+
+def test_no_windows_role_change_is_left_on_the_default_timeout():
+    """`iis.setup_certenroll` stands up IIS — the same class of work as an AD DS
+    promotion or an ADCS install, all of which run 8-24 minutes on the
+    deployment host. The 300s Step default cut it off mid-install."""
+    role_changes = {
+        "iis.setup_certenroll",
+        "iis.remove_certenroll",
+        "ocsp.install",
+        "ocsp.remove",
+        "ca.install",
+        "ca.uninstall",
+        "dc.install_forest",
+        "dc.remove_forest",
+    }
+    ctx = _web_ctx()
+    sequences = [
+        op_sequence(kind, ctx)
+        for kind in ("webServerCert", "domainJoin", "caConnect", "domainLeave")
+    ] + [
+        teardown_action_sequence(kind, ctx)
+        for kind in ("web.cleanup", "ca.cleanup", "forest.cleanup")
+    ]
+    checked = set()
+    for steps in sequences:
+        for step in steps:
+            if step.command not in role_changes:
+                continue
+            checked.add(step.command)
+            assert step.timeout_s >= 1800, f"{step.id} ({step.command})"
+    assert {"iis.setup_certenroll", "ocsp.install", "ca.install"} <= checked
+    assert {"ocsp.remove", "iis.remove_certenroll", "ca.uninstall"} <= checked
 
 
 def test_ocsp_config_points_at_the_issuing_ca():
