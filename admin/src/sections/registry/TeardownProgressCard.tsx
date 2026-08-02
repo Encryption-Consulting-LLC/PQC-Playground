@@ -24,10 +24,10 @@ function statusIcon(status: OpRunState["status"]) {
 /**
  * Live progress for the running teardown.
  *
- * Sits above the tabs rather than inside a panel, for two reasons: a teardown
- * started from Environments keeps running while the admin reads Orphans, and
- * rows for destroyed VMs disappear on the next refetch — inline row progress
- * would unmount itself mid-job.
+ * Rendered by the `/registry` layout route, above the tab Outlet, for two
+ * reasons: a teardown started from Environments keeps running while the admin
+ * reads Orphans, and rows for destroyed VMs disappear on the next refetch —
+ * inline row progress would unmount itself mid-job.
  */
 export function TeardownProgressCard() {
   const { job, state, dismiss } = useTeardownJob()
