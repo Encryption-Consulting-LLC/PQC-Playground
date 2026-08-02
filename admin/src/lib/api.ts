@@ -398,3 +398,107 @@ export const stopDeployments = (body: { owner?: string; mode?: "step" | "operati
     method: "POST",
     body: JSON.stringify(body),
   })
+
+// --- /admin/teardown ---------------------------------------------------------
+
+/** Why a registry entry looks abandoned. A row can fire several at once. */
+export type OrphanSignal = "absentFromEsxi" | "agentDead" | "statusError" | "stuckCloning"
+
+export interface EnvironmentVm {
+  vmName: string
+  appName: string | null
+  status: "cloning" | "ready" | "error" | "deleted"
+  ip: string | null
+  /** `null` when ESXi could not be read — never assume absence from it. */
+  presentInEsxi: boolean | null
+  /** "none" means the VM never had an agent, which is normal for several templates. */
+  agentState: "live" | "dead" | "none"
+  lastConnectedAt: number | null
+  signals: OrphanSignal[]
+  /** Whether deleting the registry row alone is provably safe. */
+  purgeable: boolean
+  jobId: string | null
+  createdAt: number | null
+  updatedAt: number | null
+}
+
+export interface Environment {
+  key: string
+  owner: string | null
+  ownerResolved: boolean
+  ownerAmbiguous: boolean
+  projectCode: string | null
+  projectName: string | null
+  vms: EnvironmentVm[]
+  vmCount: number
+  ipCount: number
+  agentsLive: number
+  agentsTotal: number
+  flagged: number
+  createdAt: number | null
+  updatedAt: number | null
+}
+
+export interface EnvironmentList {
+  environments: Environment[]
+  count: number
+  /** False when the host could not be read; absence signals are then omitted. */
+  esxiReachable: boolean
+}
+
+export const listEnvironments = () => request<EnvironmentList>(URLS.teardown.environments)
+
+export type OrphanEntry = EnvironmentVm & {
+  owner: string | null
+  ownerResolved: boolean
+  projectCode: string | null
+  environmentKey: string
+}
+
+export interface OrphanList {
+  orphans: OrphanEntry[]
+  count: number
+  esxiReachable: boolean
+}
+
+export const listOrphans = () => request<OrphanList>(URLS.teardown.orphans)
+
+export interface TeardownPreview {
+  vms: Array<EnvironmentVm & { releasesIp: string | null }>
+  vmNames: string[]
+  toDestroy: number
+  alreadyAbsent: number
+  releasesIp: number
+  /**
+   * Digest of exactly what this preview showed. Handing it back with the
+   * confirmation is what makes the destroy act on data the admin actually saw
+   * — the server 409s if anything drifted in between.
+   */
+  confirmToken: string
+}
+
+/** Dry run: 503s rather than guessing when the ESXi host is unreachable. */
+export const previewTeardown = (vmNames: string[]) =>
+  request<TeardownPreview>(URLS.teardown.preview, {
+    method: "POST",
+    body: JSON.stringify({ vmNames }),
+  })
+
+export interface TeardownStarted {
+  jobId: string
+  vmNames: string[]
+  count: number
+}
+
+export const startTeardown = (vmNames: string[], confirmToken: string) =>
+  request<TeardownStarted>(URLS.teardown.start, {
+    method: "POST",
+    body: JSON.stringify({ vmNames, confirmToken }),
+  })
+
+/** Delete registry rows only — destroys no VM. 409s on anything still on the host. */
+export const purgeOrphans = (vmNames: string[]) =>
+  request<{ purged: string[]; count: number }>(URLS.teardown.purge, {
+    method: "POST",
+    body: JSON.stringify({ vmNames }),
+  })

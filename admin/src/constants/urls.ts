@@ -35,4 +35,14 @@ export const URLS = {
     list: "/admin/deployments",
     stop: "/admin/deployments/stop",
   },
+  teardown: {
+    environments: "/admin/teardown/environments",
+    orphans: "/admin/teardown/orphans",
+    preview: "/admin/teardown/preview",
+    start: "/admin/teardown",
+    purge: "/admin/teardown/orphans/purge",
+  },
+  ws: {
+    jobs: (jobId: string) => `/ws/jobs/${encodeURIComponent(jobId)}`,
+  },
 } as const
