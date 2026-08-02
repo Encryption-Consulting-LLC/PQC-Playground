@@ -48,7 +48,12 @@ import { connectionHealthForOperation, domainJoinEdge } from "@/lib/topology"
 import { buildDeployTopology } from "@/lib/deployTopology"
 import { isCertificateJourney } from "@/lib/certificateJourney"
 import { createLabEvidence, isLabHealthReport } from "@/lib/labEvidence"
-import { openJobSocket, type OpRunState } from "@/lib/ws"
+import {
+  openJobSocket,
+  type OpRunState,
+  WS_CLOSE_JOB_GONE,
+  WS_CLOSE_UNAUTHORIZED,
+} from "@/lib/ws"
 import { useAuthStore } from "@/store/auth"
 import { useProjectsStore } from "@/store/projects"
 import { useTopologyStore } from "@/store/topology"
@@ -737,7 +742,13 @@ function attachPlanSocket(
     },
     onError: (e) => {
       planSocketClose = null
-      if (e.status === 0 && attempt < PLAN_SOCKET_RETRY_DELAYS_MS.length) {
+      // 4401/4404 can never recover; retrying them just delays the real
+      // message behind three backoffs that were meant for transport blips.
+      const recoverable =
+        e.status === 0 &&
+        e.code !== WS_CLOSE_UNAUTHORIZED &&
+        e.code !== WS_CLOSE_JOB_GONE
+      if (recoverable && attempt < PLAN_SOCKET_RETRY_DELAYS_MS.length) {
         planRetryTimer = setTimeout(
           () => attachPlanSocket(jobId, token, attempt + 1),
           PLAN_SOCKET_RETRY_DELAYS_MS[attempt],
@@ -745,7 +756,16 @@ function attachPlanSocket(
         return
       }
       revertNonTerminalToStaged()
-      if (e.status === 0) {
+      if (e.code === WS_CLOSE_UNAUTHORIZED) {
+        // The next HTTP call's 401 handler gates back to the login form.
+        toast.error(
+          "Your session expired — sign in again to follow the deploy.",
+        )
+      } else if (e.code === WS_CLOSE_JOB_GONE) {
+        toast.warning(
+          "That deploy's progress stream has expired — the job may still have finished on the server.",
+        )
+      } else if (e.status === 0) {
         toast.warning(
           "Lost connection to the deploy job — operations reverted to staged, you can retry.",
         )

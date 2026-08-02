@@ -9,6 +9,11 @@
 
 import { API_BASE, URLS } from "@/constants"
 
+/** The job's snapshot expired — reconnecting will never succeed. */
+export const WS_CLOSE_JOB_GONE = 4404
+/** The session token was rejected on the upgrade. */
+export const WS_CLOSE_UNAUTHORIZED = 4401
+
 export interface QueuedEvent {
   type: "queued"
 }
@@ -34,6 +39,8 @@ export interface ErrorEvent {
   type: "error"
   status: number
   detail: string
+  /** Close code, on a transport failure (`status: 0`) only — 4401/4404 above. */
+  code?: number
 }
 
 /** Current run state of one op within a deploy plan — mirrors the backend's `OpRunState`. */
@@ -132,14 +139,17 @@ export function openJobSocket(
   }
 
   // A socket that closes without a terminal frame (backend crash, dropped
-  // connection) is a failure the caller needs to react to.
-  ws.onclose = () => {
+  // connection) is a failure the caller needs to react to. The close code
+  // rides along: a rejected token (4401) or an expired job (4404) will never
+  // recover, and retrying them as if they were a blip hides the real cause.
+  ws.onclose = (ev) => {
     if (!settled) {
       settled = true
       handlers.onError?.({
         type: "error",
         status: 0,
         detail: "Progress connection closed before completion.",
+        code: ev.code,
       })
     }
   }

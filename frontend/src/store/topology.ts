@@ -32,7 +32,7 @@ import { ApiError, deleteIso, deleteVm } from "@/lib/api"
 import type { CertificateJourney } from "@/lib/certificateJourney"
 import type { LabEvidence, ServiceHealth } from "@/lib/labEvidence"
 import { aggregateServiceHealth, serviceHealthForEdge } from "@/lib/labEvidence"
-import { openJobSocket } from "@/lib/ws"
+import { openJobSocket, WS_CLOSE_UNAUTHORIZED } from "@/lib/ws"
 import {
   canConnectServiceSockets,
   connectionPorts,
@@ -200,9 +200,10 @@ function attachJobSocket(
       activeSockets.delete(nodeId)
       // status 0 is a synthetic frame from `lib/ws.ts` for a socket that
       // closed without a terminal frame — e.g. the backend's snapshot expired
-      // (4404) or the WS dropped mid-clone. That's not necessarily a failed
-      // clone, so revert to draft (retryable) rather than a hard error; a
-      // real backend `error` frame (status > 0) is a genuine failure.
+      // (4404), the token was rejected (4401), or the WS dropped mid-clone.
+      // None of those is necessarily a failed clone, so revert to draft
+      // (retryable) rather than a hard error; a real backend `error` frame
+      // (status > 0) is a genuine failure.
       if (e.status === 0) {
         patch({
           lifecycle: LIFECYCLE.draft,
@@ -289,8 +290,11 @@ function attachTeardownSocket(
       })
       // status 0 = socket dropped without a terminal frame; the backend job
       // may still finish. A retried teardown converges either way (the
-      // worker treats an already-absent VM as success).
-      if (e.status === 0) {
+      // worker treats an already-absent VM as success) — unless the token was
+      // rejected, where "tear down again" would just bounce to the login form.
+      if (e.code === WS_CLOSE_UNAUTHORIZED) {
+        toast.error("Your session expired — sign in again to retry.")
+      } else if (e.status === 0) {
         toast.warning(
           "Lost connection to the teardown job — tear down again to retry.",
         )
