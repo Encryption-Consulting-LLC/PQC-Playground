@@ -517,7 +517,7 @@ requires-dist = [
     { name = "python-multipart", specifier = ">=0.0.20" },
     { name = "redis", specifier = ">=5.0" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
-    { name = "vmkit", git = "https://github.com/Encryption-Consulting-LLC/vmkit.git?tag=v0.3.1" },
+    { name = "vmkit", git = "https://github.com/Encryption-Consulting-LLC/vmkit.git?tag=v0.3.2" },
 ]
 
 [package.metadata.requires-dev]
@@ -963,8 +963,8 @@ wheels = [
 
 [[package]]
 name = "vmkit"
-version = "0.3.1"
-source = { git = "https://github.com/Encryption-Consulting-LLC/vmkit.git?tag=v0.3.1#63aab6def3fe2fbf98d69a6921e630920a2fe24c" }
+version = "0.3.2"
+source = { git = "https://github.com/Encryption-Consulting-LLC/vmkit.git?tag=v0.3.2#a9de0d0dfca286a57da2d67bf424b251c81f1d73" }
 dependencies = [
     { name = "pyvmomi" },
     { name = "requests" },
