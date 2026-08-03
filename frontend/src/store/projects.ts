@@ -12,8 +12,9 @@
  *
  * Snapshot writes are checkpointed (see `lib/projectAutosave.ts`) rather than
  * happening on every topology mutation, so dragging/dropping nodes around
- * doesn't spam localStorage. `markActiveDirty` is intentionally idempotent
- * (no-ops once already dirty) for the same reason.
+ * doesn't spam the persistence layer. Between checkpoints the project reads as
+ * unsaved — and `reconcileActiveDirty` decides that by comparing what would be
+ * written against what is stored, never by watching for store churn.
  */
 
 import { create } from "zustand"
@@ -29,6 +30,7 @@ import type { MachineData } from "@/store/topology"
 import { DEFAULT_VIEWPORT, useTopologyStore } from "@/store/topology"
 import { useStagingStore } from "@/store/staging"
 import { withSuppressedAutosave } from "@/lib/projectAutosave"
+import { projectFingerprint } from "@/lib/projectSerialize"
 import { gatedLocalStorage } from "@/lib/persistenceMode"
 import { buildPkiTemplateIntoStores } from "@/lib/projectTemplate"
 
@@ -105,6 +107,18 @@ export function emptyProject(name: string): Project {
   }
 }
 
+/**
+ * The live working state, in the shape a project snapshot stores it.
+ *
+ * One read shared by every write path (checkpoint, draft, dirty comparison) so
+ * "what would be saved" cannot drift between deciding to save and saving.
+ */
+function workingSnapshot() {
+  const { nodes, edges, counters, viewport } = useTopologyStore.getState()
+  const { ops: stagedOps, deployJobId } = useStagingStore.getState()
+  return { nodes, edges, counters, viewport, stagedOps, deployJobId }
+}
+
 /** Load a project's ops + snapshot into the working stores (autosave-suppressed). */
 function activate(project: Project) {
   withSuppressedAutosave(() => {
@@ -150,7 +164,13 @@ interface ProjectsState {
    * projectSync subscription watching for removed ids.
    */
   deleteProject: (id: string) => void
-  markActiveDirty: () => void
+  /**
+   * Re-decide whether the active project reads as unsaved, by comparing what
+   * would be written against what is stored. Replaces a blanket "mark dirty on
+   * any node/edge churn", which flipped the marker on selection and on React
+   * Flow's mount-time measurement — neither of which is ever written.
+   */
+  reconcileActiveDirty: () => void
   saveActiveSnapshot: () => void
   persistActiveDraft: () => void
   persistActiveViewport: () => void
@@ -280,13 +300,19 @@ export const useProjectsStore = create<ProjectsState>()(
         }
       },
 
-      markActiveDirty() {
+      reconcileActiveDirty() {
         const { activeProjectId, projects } = get()
         const active = projects.find((p) => p.id === activeProjectId)
-        if (!active || active.dirty) return
+        if (!active) return
+        // Two-way on purpose: dragging a node and dragging it back leaves
+        // nothing to save, and the marker should say so.
+        const dirty =
+          projectFingerprint({ ...active, ...workingSnapshot() }) !==
+          projectFingerprint(active)
+        if (dirty === active.dirty) return
         set((s) => ({
           projects: s.projects.map((p) =>
-            p.id === activeProjectId ? { ...p, dirty: true } : p,
+            p.id === activeProjectId ? { ...p, dirty } : p,
           ),
         }))
       },
@@ -294,22 +320,11 @@ export const useProjectsStore = create<ProjectsState>()(
       saveActiveSnapshot() {
         const { activeProjectId } = get()
         if (!activeProjectId) return
-        const { nodes, edges, counters, viewport } = useTopologyStore.getState()
-        const { ops: stagedOps, deployJobId } = useStagingStore.getState()
+        const snapshot = workingSnapshot()
         set((s) => ({
           projects: s.projects.map((p) =>
             p.id === activeProjectId
-              ? {
-                  ...p,
-                  nodes,
-                  edges,
-                  counters,
-                  viewport,
-                  stagedOps,
-                  deployJobId,
-                  dirty: false,
-                  updatedAt: Date.now(),
-                }
+              ? { ...p, ...snapshot, dirty: false, updatedAt: Date.now() }
               : p,
           ),
         }))
@@ -318,21 +333,10 @@ export const useProjectsStore = create<ProjectsState>()(
       persistActiveDraft() {
         const { activeProjectId } = get()
         if (!activeProjectId) return
-        const { nodes, edges, counters, viewport } = useTopologyStore.getState()
-        const { ops: stagedOps, deployJobId } = useStagingStore.getState()
+        const snapshot = workingSnapshot()
         set((s) => ({
           projects: s.projects.map((p) =>
-            p.id === activeProjectId
-              ? {
-                  ...p,
-                  nodes,
-                  edges,
-                  counters,
-                  viewport,
-                  stagedOps,
-                  deployJobId,
-                }
-              : p,
+            p.id === activeProjectId ? { ...p, ...snapshot } : p,
           ),
         }))
       },

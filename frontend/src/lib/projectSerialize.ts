@@ -65,6 +65,21 @@ function cleanOp(op: StagedOp): StagedOp {
   return cleaned
 }
 
+/**
+ * Canonical JSON for one project — the single definition of "this differs".
+ *
+ * Both change detectors read it: `lib/projectSync.ts` compares against the last
+ * server-acked copy to decide whether to write, and `store/projects.ts` compares
+ * the working stores against the saved snapshot to decide whether the project
+ * reads as unsaved. Deriving both from `serializeProject` is what keeps the
+ * unsaved marker honest — React Flow's `selected`/`measured`/`dragging` churn is
+ * stripped here, so clicking a node or merely measuring one on mount cannot
+ * claim there is something to save.
+ */
+export function projectFingerprint(p: Project): string {
+  return JSON.stringify(serializeProject(p))
+}
+
 export function serializeProject(p: Project): ProjectPayload {
   return {
     id: p.id,

@@ -3,10 +3,16 @@
  *
  * The only module that imports both `store/topology.ts` and `store/projects.ts`
  * — keeps the two stores decoupled from each other. Subscribes to topology
- * changes and decides, per change, whether it's just an in-progress edit
- * (mark the active project dirty, cheap, in-memory) or a checkpoint worth
- * writing to localStorage (a node finished deploying, or domain membership
- * changed). Plain drags/drops of `draft` nodes only mark dirty.
+ * changes and decides, per change, whether it's just an in-progress edit (leave
+ * the snapshot alone; the project reads as unsaved) or a checkpoint worth
+ * persisting (a node finished deploying, or domain membership changed). Plain
+ * drags/drops of `draft` nodes take the first path.
+ *
+ * "Unsaved" is never inferred from a store having produced a new array. React
+ * Flow emits changes for selection and for measuring nodes on mount, and neither
+ * is ever written, so that inference put an unsaved marker on a project the user
+ * had only clicked — or merely opened. `reconcileActiveDirty` asks
+ * `projectFingerprint` instead, so the marker means "there is something to save".
  */
 
 import { EDGE_TYPE } from "@/constants/topology"
@@ -104,7 +110,11 @@ export function initProjectAutosave() {
     if (nodeSetChanged || nodeStateChanged || domainChanged || healthChanged) {
       useProjectsStore.getState().saveActiveSnapshot()
     } else {
-      useProjectsStore.getState().markActiveDirty()
+      // Everything else — drags, selection, React Flow's mount-time
+      // measurement — only *might* be a change. Ask the serializer, which is
+      // the same judge the sync layer uses, rather than trusting the fact that
+      // the nodes array is a new reference.
+      useProjectsStore.getState().reconcileActiveDirty()
     }
   })
 
