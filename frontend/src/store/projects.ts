@@ -46,6 +46,13 @@ export interface Project {
   stagedOps?: StagedOp[]
   deployJobId?: string | null
   dirty: boolean
+  /**
+   * Opened from another account's share link, so the shares collection — not
+   * this account's project collection — is where it lives. Client-only, and
+   * deliberately absent from `serializeProject`: it describes where a project is
+   * stored, which is never part of the project itself.
+   */
+  collaborative?: boolean
   updatedAt: number
 }
 
@@ -153,8 +160,15 @@ interface ProjectsState {
   addProject: () => void
   /** Creates a new project pre-populated with a deploy-ready PKI lab topology. */
   addProjectFromTemplate: () => void
-  /** Adds/replaces a project loaded from an accepted guest share and opens it. */
-  openSharedProject: (project: Project) => void
+  /**
+   * Adds/replaces a project loaded from an accepted share link and opens it.
+   * `collaborative` marks someone else's share, which keeps it out of this
+   * account's owned-project sync (see `lib/projectSync.ts`).
+   */
+  openSharedProject: (
+    project: Project,
+    opts?: { collaborative?: boolean },
+  ) => void
   renameProject: (id: string, name: string) => void
   switchProject: (id: string) => void
   /**
@@ -236,8 +250,13 @@ export const useProjectsStore = create<ProjectsState>()(
         get().saveActiveSnapshot()
       },
 
-      openSharedProject(project) {
+      openSharedProject(incoming, opts) {
         get().persistActiveDraft()
+        // Reopening one's *own* share is just reopening one's own project, so
+        // the flag only rides along for someone else's.
+        const project: Project = opts?.collaborative
+          ? { ...incoming, collaborative: true }
+          : incoming
         set((s) => ({
           projects: s.projects.some((candidate) => candidate.id === project.id)
             ? s.projects.map((candidate) =>

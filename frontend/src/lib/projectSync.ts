@@ -344,6 +344,11 @@ function startSubscriptions(generation: number) {
       for (const p of state.projects) {
         const prevP = prevById.get(p.id)
         prevById.delete(p.id)
+        // A project opened from someone else's share link is backed by the
+        // shares collection, not by this account's projects — its id belongs to
+        // the sharer. Writing it here would either collide with their document
+        // or fork a private copy that silently stops collaborating.
+        if (p.collaborative) continue
         if (prevP === p) continue
         const serialized = JSON.stringify(serializeProject(p))
         if (serialized === lastSynced.get(p.id)) continue
@@ -353,8 +358,11 @@ function startSubscriptions(generation: number) {
         if (prevP && prevP.dirty && !p.dirty) void flushProject(p.id)
         else scheduleFlush(p.id)
       }
-      // Removed ids → DELETE. No delete UI exists yet; future-proofing.
-      for (const id of prevById.keys()) void removeProject(id)
+      // Removed ids → DELETE. Closing a shared project detaches this account
+      // from it; it must not delete the sharer's document.
+      for (const [id, p] of prevById) {
+        if (!p.collaborative) void removeProject(id)
+      }
     }
 
     // A switch flushes the outgoing draft so switch-then-reload can't lose it.

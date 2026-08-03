@@ -202,6 +202,93 @@ describe("local project session initialization", () => {
   })
 })
 
+describe("shared projects", () => {
+  function serverWith(existing: Project) {
+    return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === "PUT" || init?.method === "POST") {
+        return Response.json({ ...existing, createdAt: 1, updatedAt: 2 })
+      }
+      if (url.endsWith("/api/projects")) {
+        return Response.json({
+          projects: [
+            {
+              id: existing.id,
+              name: existing.name,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          count: 1,
+        })
+      }
+      return Response.json({ ...existing, createdAt: 1, updatedAt: 1 })
+    })
+  }
+
+  it("never writes another account's shared project as its own", async () => {
+    const own = project("own-project", "Own project")
+    const fetchMock = serverWith(own)
+    vi.stubGlobal("fetch", fetchMock)
+    await initServerProjects("bob")
+
+    useProjectsStore
+      .getState()
+      .openSharedProject(project("alices-project", "Alice's shared lab"), {
+        collaborative: true,
+      })
+    useProjectsStore.getState().renameProject("alices-project", "Edited")
+
+    const writes = fetchMock.mock.calls.filter(
+      ([, init]) => init?.method === "PUT" || init?.method === "POST",
+    )
+    expect(writes.some(([url]) => String(url).includes("alices-project"))).toBe(
+      false,
+    )
+    stopServerProjects()
+  })
+
+  it("does not delete the sharer's document when the tab is closed", async () => {
+    const own = project("own-project", "Own project")
+    const fetchMock = serverWith(own)
+    vi.stubGlobal("fetch", fetchMock)
+    await initServerProjects("bob")
+
+    useProjectsStore
+      .getState()
+      .openSharedProject(project("alices-project", "Alice's shared lab"), {
+        collaborative: true,
+      })
+    useProjectsStore.getState().deleteProject("alices-project")
+
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "DELETE"),
+    ).toBe(false)
+    stopServerProjects()
+  })
+
+  it("still syncs a project reopened from the owner's own share link", async () => {
+    vi.useFakeTimers()
+    const own = project("own-project", "Own project")
+    const fetchMock = serverWith(own)
+    vi.stubGlobal("fetch", fetchMock)
+    await initServerProjects("bob")
+
+    // No `collaborative` flag: this is bob's own project arriving back, and it
+    // is still a project bob owns — the exclusion must not overreach.
+    useProjectsStore
+      .getState()
+      .openSharedProject({ ...own, name: "Renamed via own share" })
+    await vi.advanceTimersByTimeAsync(1_500)
+
+    expect(
+      fetchMock.mock.calls.some(([, init]) => init?.method === "PUT"),
+    ).toBe(true)
+    stopServerProjects()
+    vi.useRealTimers()
+  })
+})
+
 describe("saveActiveProjectNow", () => {
   /** A server that holds one project and answers writes with `status`. */
   function serverHolding(existing: Project, writeStatus = 200) {

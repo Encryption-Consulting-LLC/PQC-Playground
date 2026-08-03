@@ -74,7 +74,9 @@ export function ProjectShareLinkHandler() {
     setAccepting(true)
     try {
       const doc = await acceptProjectShare(invitation.projectId)
-      openSharedProject(deserializeProject(doc))
+      // Someone else's project: it stays backed by the share, so this account's
+      // project sync leaves it alone rather than forking a private copy.
+      openSharedProject(deserializeProject(doc), { collaborative: true })
       clearShareFromLocation()
       setInvitation(null)
       toast.success(`Joined PKI project ${invitation.projectId}.`)
