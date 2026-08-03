@@ -8,24 +8,32 @@ from app.core.sequences.definitions import provision_steps
 from app.core.sequences.model import NodeContext, RunContext
 
 
+def _step(steps, step_id):
+    return next(step for step in steps if step.id == step_id)
+
+
 def test_certificate_authority_root_provisions_install_and_verify():
     steps = provision_steps("certificateAuthority", ca_type="Root")
     # The root tail installs, configures, publishes, and relays (slice 11); the
     # install step's readiness gate is ca.verify.
-    assert steps[0].command == "ca.install"
-    assert steps[0].verify is not None
-    assert steps[0].verify.command == "ca.verify"
+    install = _step(steps, "ca-install")
+    assert install.command == "ca.install"
+    assert install.verify is not None
+    assert install.verify.command == "ca.verify"
 
 
-def test_issuing_ca_has_no_first_boot_sequence():
-    # An issuing CA can't stand up until the caConnect handshake.
-    assert provision_steps("certificateAuthority", ca_type="Issuing") == []
+def test_issuing_ca_has_no_first_boot_role_work():
+    # An issuing CA can't stand up until the caConnect handshake — its tail is
+    # the inherited-reboot settle and nothing else.
+    steps = provision_steps("certificateAuthority", ca_type="Issuing")
+    assert [step.id for step in steps] == ["settle-reboot"]
 
 
-def test_templates_without_a_tail_provision_nothing():
-    # A member server / client / standalone does its work on join, not on boot.
+def test_templates_without_a_tail_only_settle_their_inherited_reboot():
+    # A member server / client / standalone does its role work on join, not on
+    # boot — but it still clears the base image's pending reboot first.
     for template in ("webServer", "client", "standalone"):
-        assert provision_steps(template) == []
+        assert [step.id for step in provision_steps(template)] == ["settle-reboot"]
 
 
 def test_ca_install_params_come_from_template_config():
@@ -43,7 +51,7 @@ def test_ca_install_params_come_from_template_config():
         },
     )
     ctx = RunContext(nodes={"primary": node})
-    params = steps[0].resolve_params(ctx)
+    params = _step(steps, "ca-install").resolve_params(ctx)
     assert params["commonName"] == "EC-Root-CA"
     assert params["caType"] == "Root"
 

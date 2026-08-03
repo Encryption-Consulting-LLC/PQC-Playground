@@ -249,16 +249,20 @@ def build_execution_groups(
                 ]
             for item in steps:
                 item["targetNodeId"] = op.target
-            provision = provision_steps(
-                template,
-                ca_type=sibling.params.get("caType"),
-                node_id=op.target,
-                dns_records=context.dns_records,
-            )
-            tail = _manifest_steps(provision, context.nodes)
-            if tail and template not in LINUX_PRODUCT_TEMPLATES:
-                tail[0]["dependsOn"] = ["boot-settle"]
-            steps.extend(tail)
+            # Only agent-backed guests get a step tail — a Linux product VM
+            # never reaches ``provision_steps`` at run time (``_run_provision_op``
+            # returns after its setup stub), so the preview must not show one.
+            if template not in LINUX_PRODUCT_TEMPLATES:
+                provision = provision_steps(
+                    template,
+                    ca_type=sibling.params.get("caType"),
+                    node_id=op.target,
+                    dns_records=context.dns_records,
+                )
+                tail = _manifest_steps(provision, context.nodes)
+                if tail:
+                    tail[0]["dependsOn"] = ["boot-settle"]
+                steps.extend(tail)
             detail = (
                 "Service setup stub"
                 if template in LINUX_PRODUCT_TEMPLATES

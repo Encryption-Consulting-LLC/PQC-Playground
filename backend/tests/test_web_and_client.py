@@ -12,6 +12,7 @@ os.environ.setdefault(
 
 from app.core.sequences.definitions import (  # noqa: E402
     op_sequence,
+    provision_steps,
     teardown_action_sequence,
 )
 from app.core.sequences.model import DnsRecordContext, NodeContext, RunContext  # noqa: E402
@@ -127,37 +128,85 @@ def test_web_iis_step_is_the_web_half():
     assert iis.resolve_params(ctx)["scope"] == "web"
 
 
+#: A Windows role change is slow, and a stalled one fails ~17 minutes in — the
+#: role-change steps that carried neither a retry schedule nor a reboot recovery
+#: (`iis-web`, `iis-share`, `ca-install`, `install-issuing`) failed their whole
+#: op on the first stall and cancelled every dependent.
+_ROLE_CHANGE_COMMANDS = {
+    "iis.setup_certenroll",
+    "iis.remove_certenroll",
+    "ocsp.install",
+    "ocsp.remove",
+    "ca.install",
+    "ca.uninstall",
+    "dc.install_forest",
+    "dc.remove_forest",
+}
+
+
+def _all_role_change_steps():
+    """Every role-change step the backend can dispatch — the op sequences, the
+    teardown actions, *and* the createVm provision tails (where `ca-install`
+    lives)."""
+    ctx = _web_ctx()
+    sequences = (
+        [
+            op_sequence(kind, ctx)
+            for kind in ("webServerCert", "domainJoin", "caConnect", "domainLeave")
+        ]
+        + [
+            teardown_action_sequence(kind, ctx)
+            for kind in ("web.cleanup", "ca.cleanup", "forest.cleanup")
+        ]
+        + [
+            provision_steps("domainController"),
+            provision_steps("certificateAuthority", ca_type="Root"),
+            provision_steps("certificateAuthority", ca_type="Issuing"),
+            provision_steps("webServer"),
+            provision_steps("client"),
+            provision_steps("standalone"),
+        ]
+    )
+    return [
+        step
+        for steps in sequences
+        for step in steps
+        if step.command in _ROLE_CHANGE_COMMANDS
+    ]
+
+
 def test_no_windows_role_change_is_left_on_the_default_timeout():
     """`iis.setup_certenroll` stands up IIS — the same class of work as an AD DS
     promotion or an ADCS install, all of which run 8-24 minutes on the
     deployment host. The 300s Step default cut it off mid-install."""
-    role_changes = {
-        "iis.setup_certenroll",
-        "iis.remove_certenroll",
-        "ocsp.install",
-        "ocsp.remove",
-        "ca.install",
-        "ca.uninstall",
-        "dc.install_forest",
-        "dc.remove_forest",
-    }
-    ctx = _web_ctx()
-    sequences = [
-        op_sequence(kind, ctx)
-        for kind in ("webServerCert", "domainJoin", "caConnect", "domainLeave")
-    ] + [
-        teardown_action_sequence(kind, ctx)
-        for kind in ("web.cleanup", "ca.cleanup", "forest.cleanup")
-    ]
     checked = set()
-    for steps in sequences:
-        for step in steps:
-            if step.command not in role_changes:
-                continue
-            checked.add(step.command)
-            assert step.timeout_s >= 1800, f"{step.id} ({step.command})"
+    for step in _all_role_change_steps():
+        checked.add(step.command)
+        assert step.timeout_s >= 1800, f"{step.id} ({step.command})"
     assert {"iis.setup_certenroll", "ocsp.install", "ca.install"} <= checked
     assert {"ocsp.remove", "iis.remove_certenroll", "ca.uninstall"} <= checked
+
+
+def test_provision_tail_always_settles_the_inherited_reboot_first():
+    """The base image ships an unconsumed CBS reboot mark, so every agent-backed
+    guest reboots before any role work — including the two templates whose tail
+    is otherwise empty but that install a Windows feature later in the plan (the
+    issuing CA's `install-issuing`, the web host's `iis-web`)."""
+    tails = {
+        "domainController": provision_steps("domainController"),
+        "rootCa": provision_steps("certificateAuthority", ca_type="Root"),
+        "issuingCa": provision_steps("certificateAuthority", ca_type="Issuing"),
+        "webServer": provision_steps("webServer"),
+        "client": provision_steps("client"),
+        "standalone": provision_steps("standalone"),
+    }
+    for label, steps in tails.items():
+        assert steps, label
+        assert steps[0].id == "settle-reboot", label
+        assert steps[0].command == "system.reboot", label
+        assert steps[0].expects_disconnect is True, label
+    assert [step.id for step in tails["issuingCa"]] == ["settle-reboot"]
+    assert [step.id for step in tails["webServer"]] == ["settle-reboot"]
 
 
 def test_ocsp_config_points_at_the_issuing_ca():

@@ -34,19 +34,29 @@ def test_ds_config_dn_from_domain():
     assert _ds_config_dn("encon.pki") == ("CN=Configuration,DC=encon,DC=pki")
 
 
+def _step(steps, step_id):
+    return next(step for step in steps if step.id == step_id)
+
+
 def test_dc_provision_promotes_reboots_and_points_dns_at_self():
     steps = provision_steps("domainController")
+    # The tail opens by settling the base image's inherited reboot mark — the
+    # promotion's prerequisite check refuses while it is set.
     assert [s.command for s in steps] == [
+        "system.reboot",
         "dc.install_forest",
         "system.reboot",
         "dns.set_client",
     ]
-    assert "safeModePassword" in steps[0].secret_keys
+    assert steps[0].id == "settle-reboot"
+    assert steps[0].expects_disconnect is True
+    forest = _step(steps, "install-forest")
+    assert "safeModePassword" in forest.secret_keys
     # Promotion recovers from its own role install asking for a restart.
-    assert "dcpromo.general.15" in steps[0].reboot_recovery_signatures
-    assert steps[1].expects_disconnect is True
-    assert steps[1].verify is None
-    assert steps[2].verify.command == "dc.verify"
+    assert "dcpromo.general.15" in forest.reboot_recovery_signatures
+    assert steps[2].expects_disconnect is True
+    assert steps[2].verify is None
+    assert steps[3].verify.command == "dc.verify"
 
 
 def test_dc_forest_params_map_config():
@@ -65,15 +75,13 @@ def test_dc_forest_params_map_config():
         },
     )
     ctx = RunContext(nodes={"primary": node})
-    p = provision_steps("domainController")[0].resolve_params(ctx)
+    steps = provision_steps("domainController")
+    p = _step(steps, "install-forest").resolve_params(ctx)
     assert p["domainName"] == "encon.pki"
     assert p["forestMode"] == "Win2025"
     assert p["safeModePassword"] == "Str0ng-Lab-Pass!"
     # dns.set_client points at the DC's own IP.
-    assert (
-        provision_steps("domainController")[2].resolve_params(ctx)["servers"]
-        == "192.168.1.90"
-    )
+    assert _step(steps, "dns-self").resolve_params(ctx)["servers"] == "192.168.1.90"
 
 
 def test_dc_applies_its_a_record_and_verifies_ad_srv_records():
@@ -135,6 +143,7 @@ def _root_ctx():
 def test_root_ca_tail_full_sequence():
     steps = provision_steps("certificateAuthority", ca_type="Root")
     assert [s.command for s in steps] == [
+        "system.reboot",
         "ca.install",
         "ca.configure_settings",
         "ca.configure_cdp_aia",
@@ -143,9 +152,9 @@ def test_root_ca_tail_full_sequence():
         "file.read",
     ]
     # The two reads publish the root cert + CRL into the relay.
-    assert steps[4].produces == ("root_crt",)
-    assert steps[5].produces == ("root_crl",)
-    assert steps[3].result_artifacts == {
+    assert _step(steps, "read-root-crt").produces == ("root_crt",)
+    assert _step(steps, "read-root-crl").produces == ("root_crl",)
+    assert _step(steps, "ca-crl").result_artifacts == {
         "certificateFileName": "root_cert_filename",
         "baseCrlFileName": "root_crl_filename",
     }
@@ -153,9 +162,9 @@ def test_root_ca_tail_full_sequence():
 
 def test_root_ca_settings_include_dsconfigdn_and_periods():
     ctx = _root_ctx()
-    settings = provision_steps("certificateAuthority", ca_type="Root")[
-        1
-    ].resolve_params(ctx)
+    settings = _step(
+        provision_steps("certificateAuthority", ca_type="Root"), "ca-settings"
+    ).resolve_params(ctx)
     assert settings["dsConfigDn"] == "CN=Configuration,DC=encon,DC=pki"
     assert settings["crlPeriodUnits"] == "52"
     assert settings["validityPeriodUnits"] == "10"
@@ -164,7 +173,9 @@ def test_root_ca_settings_include_dsconfigdn_and_periods():
 
 def test_root_ca_cdp_aia_use_pki_host_and_three_locations():
     ctx = _root_ctx()
-    p = provision_steps("certificateAuthority", ca_type="Root")[2].resolve_params(ctx)
+    p = _step(
+        provision_steps("certificateAuthority", ca_type="Root"), "ca-cdp-aia"
+    ).resolve_params(ctx)
     assert p["aiaUrls"].count("\n") == 2  # 3 AIA locations
     assert p["cdpUrls"].count("\n") == 2  # 3 CDP locations
     assert "http://pki.encon.pki/CertEnroll/" in p["aiaUrls"]
@@ -172,7 +183,9 @@ def test_root_ca_cdp_aia_use_pki_host_and_three_locations():
 
 def test_root_crt_read_path_uses_observed_publication_name():
     ctx = _root_ctx()
-    read = provision_steps("certificateAuthority", ca_type="Root")[4]
+    read = _step(
+        provision_steps("certificateAuthority", ca_type="Root"), "read-root-crt"
+    )
     path = read.resolve_params(ctx)["path"]
     assert path.endswith("guest-abc12-ca01_EC-Root-CA.crt")
 
@@ -182,16 +195,21 @@ def test_root_ca_uses_configured_publication_directory_end_to_end():
     ctx.nodes["primary"].template_config["certEnrollPath"] = "D:\\PKI\\Published"
     steps = provision_steps("certificateAuthority", ca_type="Root")
 
-    publication = steps[2].resolve_params(ctx)
+    publication = _step(steps, "ca-cdp-aia").resolve_params(ctx)
     assert "1:D:\\PKI\\Published\\%1_%3%4.crt" in publication["aiaUrls"]
     assert "1:D:\\PKI\\Published\\%3%8%9.crl" in publication["cdpUrls"]
-    assert steps[3].resolve_params(ctx) == {"certEnrollPath": "D:\\PKI\\Published"}
-    assert steps[4].resolve_params(ctx)["path"].startswith("D:\\PKI\\Published\\")
-    assert steps[5].resolve_params(ctx)["path"].startswith("D:\\PKI\\Published\\")
+    assert _step(steps, "ca-crl").resolve_params(ctx) == {
+        "certEnrollPath": "D:\\PKI\\Published"
+    }
+    for step_id in ("read-root-crt", "read-root-crl"):
+        path = _step(steps, step_id).resolve_params(ctx)["path"]
+        assert path.startswith("D:\\PKI\\Published\\")
 
 
-def test_issuing_ca_has_no_createvm_tail():
-    assert provision_steps("certificateAuthority", ca_type="Issuing") == []
+def test_issuing_ca_has_no_createvm_role_work():
+    assert [
+        step.id for step in provision_steps("certificateAuthority", ca_type="Issuing")
+    ] == ["settle-reboot"]
 
 
 def _full_lab_ctx():

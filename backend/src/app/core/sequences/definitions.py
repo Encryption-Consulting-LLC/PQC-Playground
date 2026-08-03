@@ -471,6 +471,31 @@ _PROVISION_SEQUENCES = {
 }
 
 
+def _settle_reboot_step() -> Step:
+    """Consume whatever servicing state the base image was sealed with.
+
+    ``ws-2025-base`` ships an unconsumed CBS reboot mark (a BootCritical
+    Feature-on-Demand package was removed with DISM before the image was
+    sealed). While it is set, TrustedInstaller skips startup processing,
+    ``C:\\Windows\\ServerManager`` stays empty, and every
+    ``Install-WindowsFeature`` has to rebuild the whole CBS enumeration — which
+    under I/O contention overruns Server Manager's own window and comes back as
+    ``GetEnumerationState_Timeout``. It is also what made all eight recorded
+    forest promotions refuse their first attempt (``dcpromo.general.15``) and
+    survive only on the engine's recovery reboot.
+
+    One reboot clears it, so every agent-backed guest takes it before any role
+    work — rather than relying on which sequence happens to restart when.
+    """
+    return Step(
+        id="settle-reboot",
+        command="system.reboot",
+        target=PRIMARY,
+        expects_disconnect=True,
+        timeout_s=_REBOOT_S,
+    )
+
+
 def provision_steps(
     template: str,
     *,
@@ -478,14 +503,22 @@ def provision_steps(
     node_id: str | None = None,
     dns_records: tuple[DnsRecordContext, ...] = (),
 ) -> list[Step]:
-    """The createVm provision tail for ``template`` (empty when there's none).
+    """The createVm provision tail for ``template``.
+
+    Always opens with ``settle-reboot`` (see :func:`_settle_reboot_step`) —
+    *before* the early returns below, because the templates whose role tail is
+    empty here still install a Windows feature later in the plan: the issuing
+    CA's ``install-issuing`` in caConnect and the web server's ``iis-web`` in
+    webServerCert. Agentless guests never reach this — ``_run_provision_op``
+    short-circuits on a Linux product template or a missing agent vm id.
 
     ``ca_type`` skips provisioning an *issuing* CA on first boot — it can't
-    stand up until the caConnect handshake, so its createVm tail is empty and
-    the work happens in that op.
+    stand up until the caConnect handshake, so its createVm tail is just the
+    settle reboot and the work happens in that op.
     """
+    steps = [_settle_reboot_step()]
     if template == "certificateAuthority" and ca_type == "Issuing":
-        return []
+        return steps
     if template == "domainController":
         include_dns = bool(
             node_id
@@ -494,9 +527,11 @@ def provision_steps(
                 for record in dns_records
             )
         )
-        return _domain_controller_provision(include_dns=include_dns)
+        return steps + _domain_controller_provision(include_dns=include_dns)
     builder = _PROVISION_SEQUENCES.get(template)
-    return builder() if builder else []
+    if builder is not None:
+        steps.extend(builder())
+    return steps
 
 
 def _domain_join_sequence(ctx: RunContext) -> list[Step]:
