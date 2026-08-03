@@ -13,6 +13,7 @@ from app.core.sequences.engine import (
     SequenceEngine,
     SequenceError,
     deterministic_step_job_id,
+    visible_step_id,
 )
 from app.core.sequences.model import NodeContext, RunContext, Step, StepRuntime
 
@@ -22,6 +23,7 @@ __all__ = [
     "SequenceEngine",
     "SequenceError",
     "deterministic_step_job_id",
+    "visible_step_id",
     "NodeContext",
     "RunContext",
     "Step",

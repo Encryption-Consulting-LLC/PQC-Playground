@@ -426,6 +426,40 @@ def deterministic_step_job_id(plan_job_id: str, op_id: str, step_id: str) -> str
     return f"{plan_job_id}-{op_id}-{step_id}"
 
 
+#: Job-key suffixes this module mints for a *re*dispatch of a step the client
+#: already has one row for. ``.retry.{n}`` / ``.verify.{n}`` are matched on the
+#: marker, since the attempt number varies.
+_REDISPATCH_MARKERS = (".retry.", ".rebootrecover", ".postreboot")
+_VERIFY_MARKER = ".verify."
+
+
+def visible_step_id(job_key: str) -> str:
+    """The execution-manifest row a dispatch *job key* belongs to.
+
+    Every attempt at a step needs its own job key — the key is the dispatch
+    idempotency key, so a retry, a post-reboot redispatch, or the n-th verify
+    probe must not reuse the one whose terminal snapshot already exists
+    (``_dispatch_with_retry`` / ``_reboot_and_redispatch`` / ``_run_verify``).
+    But the UI has exactly one row per *step*, plus one for its verify probe, so
+    forwarding those keys as step ids reported progress against rows that don't
+    exist: the step actually running stayed grey while a phantom entry
+    accumulated its state, and the op's phase text named a step
+    (``iis-share.postreboot``) that wasn't in the list.
+
+    Collapsing back to the row id here also restores the duration prior for a
+    retried step, which ``load_step_medians`` keys by real step id.
+    """
+    for marker in _REDISPATCH_MARKERS:
+        index = job_key.find(marker)
+        if index != -1:
+            return job_key[:index]
+    index = job_key.find(_VERIFY_MARKER)
+    if index != -1:
+        # The probe's own row is `{step}.verify`; the attempt number is not shown.
+        return job_key[: index + len(_VERIFY_MARKER) - 1]
+    return job_key
+
+
 def redact_params(params: dict[str, Any], secret_keys: Iterable[str]) -> dict[str, Any]:
     """A copy of *params* with every secret key masked — for logging."""
     secret = set(secret_keys)

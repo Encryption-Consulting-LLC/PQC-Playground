@@ -10,6 +10,7 @@ from app.core.sequences.engine import (
     SequenceError,
     deterministic_step_job_id,
     redact_params,
+    visible_step_id,
 )
 from app.core.sequences.model import NodeContext, RunContext, Step, StepRuntime
 
@@ -659,6 +660,20 @@ def test_param_resolver_sees_context():
 
 def test_deterministic_step_job_id_is_stable():
     assert deterministic_step_job_id("job1", "op2", "step3") == "job1-op2-step3"
+
+
+def test_a_job_key_maps_back_to_the_manifest_row_it_belongs_to():
+    """Every attempt needs its own dispatch key (it *is* the idempotency key), but
+    the panel has one row per step plus one for its verify probe. Reporting
+    progress under the raw key left the running step grey and put a step id that
+    isn't in the list (`iis-share.postreboot`) in the op's phase text."""
+    assert visible_step_id("iis-share") == "iis-share"
+    assert visible_step_id("iis-share.retry.2") == "iis-share"
+    assert visible_step_id("install-forest.postreboot") == "install-forest"
+    assert visible_step_id("install-forest.rebootrecover") == "install-forest"
+    # A probe's row keeps the `.verify` suffix; only the attempt number goes.
+    assert visible_step_id("reboot.verify.0") == "reboot.verify"
+    assert visible_step_id("reboot.verify.11") == "reboot.verify"
 
 
 def test_redact_params_masks_secrets():

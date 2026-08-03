@@ -18,6 +18,7 @@ from app.core.sequences.engine import (
     HealthGateError,
     SequenceEngine,
     deterministic_step_job_id,
+    visible_step_id,
 )
 from app.core.sequences.model import RunContext, Step
 
@@ -211,8 +212,10 @@ def run_op_sequence(
     * ``dispatch`` → :func:`agentbus.dispatch_and_wait` under a deterministic
       per-step job id, so a redelivered task reuses the already-terminal result
       instead of re-running a side-effecting command; the agent's own progress
-      frames are forwarded to ``on_step_progress(step_id, phase, percent)`` and
-      the frameless-poll heartbeat to ``on_step_tick(step_id, elapsed_s)``;
+      frames are forwarded to ``on_step_progress(row_id, phase, percent)`` and
+      the frameless-poll heartbeat to ``on_step_tick(row_id, elapsed_s)`` — keyed
+      by manifest row (:func:`visible_step_id`), not by per-attempt job key, so a
+      retried step keeps updating the row the client is looking at;
     * every successful dispatch's duration is logged and sampled into
       ``step_metrics`` (the priors :func:`load_step_medians` reads);
     * ``wait_for_reconnect`` → the Mongo ``lastConnectedAt`` + live-key gate;
@@ -237,12 +240,16 @@ def run_op_sequence(
         expect_disconnect=False,
     ):
         step_job_id = deterministic_step_job_id(plan_job_id, op_id, job_key)
+        # Progress is *displayed*, so it is reported against the manifest row the
+        # client has, not the per-attempt job key (a retry / post-reboot
+        # redispatch / verify probe mints its own — see `visible_step_id`).
+        row_id = visible_step_id(job_key)
         on_progress = None
         if on_step_progress is not None:
-            on_progress = lambda phase, pct: on_step_progress(job_key, phase, pct)  # noqa: E731
+            on_progress = lambda phase, pct: on_step_progress(row_id, phase, pct)  # noqa: E731
         on_tick = None
         if on_step_tick is not None:
-            on_tick = lambda elapsed_s: on_step_tick(job_key, elapsed_s)  # noqa: E731
+            on_tick = lambda elapsed_s: on_step_tick(row_id, elapsed_s)  # noqa: E731
         started = time.monotonic()
         result = agentbus.dispatch_and_wait(
             vm_id,

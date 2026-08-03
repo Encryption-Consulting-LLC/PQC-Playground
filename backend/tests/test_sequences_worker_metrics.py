@@ -129,6 +129,66 @@ def test_run_op_sequence_records_metrics_and_threads_ticks(monkeypatch):
     assert isinstance(m["at"], int)
 
 
+def test_a_retried_step_reports_progress_against_its_own_row(monkeypatch):
+    """The regression: a retried / post-reboot dispatch forwarded its *job key* as
+    the step id, so the row the panel shows stayed grey (no state ever arrived for
+    it) while `iis-share.retry.1` accumulated the real progress off-screen."""
+    db = FakeDb()
+    ticks = []
+    progress = []
+    attempts = {"n": 0}
+
+    def fake_dispatch(
+        vm_id,
+        command,
+        params,
+        *,
+        job_id,
+        role,
+        timeout_s,
+        secret_keys=(),
+        expect_disconnect=False,
+        on_progress=None,
+        on_tick=None,
+        client=None,
+    ):
+        attempts["n"] += 1
+        if attempts["n"] == 1:
+            raise agentbus.DispatchError("Server Manager is busy")
+        if on_progress is not None:
+            on_progress("installing the web role", 40.0)
+        if on_tick is not None:
+            on_tick(30.0)
+        return {"ok": True}
+
+    monkeypatch.setattr(agentbus, "dispatch_and_wait", fake_dispatch)
+
+    steps = [
+        Step(
+            id="iis-share",
+            command="iis.setup_certenroll",
+            target="primary",
+            retry_delays_s=(0,),
+        )
+    ]
+    run_op_sequence(
+        db,
+        steps,
+        _ctx(),
+        plan_job_id="job-1",
+        op_id="op-1",
+        role="guest",
+        on_step_progress=lambda step_id, phase, pct: progress.append((step_id, pct)),
+        on_step_tick=lambda step_id, elapsed: ticks.append((step_id, elapsed)),
+    )
+
+    assert progress == [("iis-share", 40.0)]
+    assert ticks == [("iis-share", 30.0)]
+    # Metrics stay filed under the job key on purpose — `load_step_medians`
+    # depends on the command-wide fallback for exactly this case.
+    assert db["step_metrics"].docs[0]["stepId"] == "iis-share.retry.1"
+
+
 def test_metrics_write_failure_never_fails_the_step(monkeypatch):
     db = FakeDb()
     db["step_metrics"].insert_one = lambda _doc: (_ for _ in ()).throw(
