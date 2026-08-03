@@ -18,6 +18,7 @@ vi.stubGlobal("window", {
 let initLocalProjects: typeof import("@/lib/projectSync")["initLocalProjects"]
 let initServerProjects: typeof import("@/lib/projectSync")["initServerProjects"]
 let releaseAccountProjects: typeof import("@/lib/projectSync")["releaseAccountProjects"]
+let saveActiveProjectNow: typeof import("@/lib/projectSync")["saveActiveProjectNow"]
 let stopServerProjects: typeof import("@/lib/projectSync")["stopServerProjects"]
 let useProjectsStore: typeof import("@/store/projects")["useProjectsStore"]
 
@@ -46,6 +47,7 @@ beforeAll(async () => {
     initLocalProjects,
     initServerProjects,
     releaseAccountProjects,
+    saveActiveProjectNow,
     stopServerProjects,
   } = await import("@/lib/projectSync"))
   ;({ useProjectsStore } = await import("@/store/projects"))
@@ -197,5 +199,90 @@ describe("local project session initialization", () => {
 
     stopServerProjects()
     vi.useRealTimers()
+  })
+})
+
+describe("saveActiveProjectNow", () => {
+  /** A server that holds one project and answers writes with `status`. */
+  function serverHolding(existing: Project, writeStatus = 200) {
+    return vi.fn(async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input)
+      if (init?.method === "PUT" || init?.method === "POST") {
+        return writeStatus === 200
+          ? Response.json({ ...existing, createdAt: 1, updatedAt: 2 })
+          : new Response(JSON.stringify({ detail: "nope" }), {
+              status: writeStatus,
+              headers: { "content-type": "application/json" },
+            })
+      }
+      if (url.endsWith("/api/projects")) {
+        return Response.json({
+          projects: [
+            {
+              id: existing.id,
+              name: existing.name,
+              createdAt: 1,
+              updatedAt: 1,
+            },
+          ],
+          count: 1,
+        })
+      }
+      return Response.json({ ...existing, createdAt: 1, updatedAt: 1 })
+    })
+  }
+
+  it("reports success only once the server has acknowledged the write", async () => {
+    const existing = project("server-project", "Server project")
+    vi.stubGlobal("fetch", serverHolding(existing))
+
+    await initServerProjects("olivia")
+    useProjectsStore.getState().renameProject(existing.id, "Edited")
+
+    await expect(saveActiveProjectNow()).resolves.toBe(true)
+    stopServerProjects()
+  })
+
+  it("reports failure when the write is rejected", async () => {
+    const existing = project("server-project", "Server project")
+    vi.stubGlobal("fetch", serverHolding(existing, 500))
+
+    await initServerProjects("olivia")
+    useProjectsStore.getState().renameProject(existing.id, "Edited")
+
+    // This is what makes the deploy refuse rather than run against a topology
+    // the server never stored.
+    await expect(saveActiveProjectNow()).resolves.toBe(false)
+    stopServerProjects()
+  })
+
+  it("captures edits made since the last checkpoint", async () => {
+    const existing = project("server-project", "Server project")
+    const fetchMock = serverHolding(existing)
+    vi.stubGlobal("fetch", fetchMock)
+
+    await initServerProjects("olivia")
+    useProjectsStore.getState().renameProject(existing.id, "Renamed late")
+    await saveActiveProjectNow()
+
+    const write = fetchMock.mock.calls.find(
+      ([, init]) => init?.method === "PUT",
+    )
+    expect(JSON.parse(String(write?.[1]?.body)).name).toBe("Renamed late")
+    stopServerProjects()
+  })
+
+  it("is a no-op that still succeeds when there is nothing to save", async () => {
+    const existing = project("server-project", "Server project")
+    const fetchMock = serverHolding(existing)
+    vi.stubGlobal("fetch", fetchMock)
+
+    await initServerProjects("olivia")
+
+    await expect(saveActiveProjectNow()).resolves.toBe(true)
+    expect(
+      fetchMock.mock.calls.filter(([, init]) => init?.method === "PUT"),
+    ).toHaveLength(0)
+    stopServerProjects()
   })
 })

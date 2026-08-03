@@ -63,6 +63,9 @@ const lastSynced = new Map<string, string>()
 const serverKnownIds = new Set<string>()
 const timers = new Map<string, ReturnType<typeof setTimeout>>()
 const inFlight = new Set<string>()
+// The live request per id, so an awaiting caller can wait for it rather than
+// bouncing off `inFlight` and reporting a save it never confirmed.
+const inFlightWrites = new Map<string, Promise<boolean>>()
 const changedWhileInFlight = new Set<string>()
 let retryTimer: ReturnType<typeof setTimeout> | null = null
 let unsubscribeProjects: (() => void) | null = null
@@ -376,8 +379,16 @@ function scheduleFlush(id: string) {
   )
 }
 
-async function flushProject(id: string, init?: RequestInit): Promise<void> {
-  if (!isServerPersistence() || writesForbidden) return
+/**
+ * Write one project if it differs from the last acked copy.
+ *
+ * Returns whether the server is now known to hold the current serialization —
+ * true for a successful write *and* for a no-op where it already did. Callers
+ * that only fire-and-forget ignore it; `saveActiveProjectNow` is the one that
+ * needs a real answer.
+ */
+async function flushProject(id: string, init?: RequestInit): Promise<boolean> {
+  if (!isServerPersistence() || writesForbidden) return false
   const generation = syncGeneration
   const timer = timers.get(id)
   if (timer) {
@@ -386,50 +397,60 @@ async function flushProject(id: string, init?: RequestInit): Promise<void> {
   }
   if (inFlight.has(id)) {
     changedWhileInFlight.add(id)
-    return
+    return false
   }
   const project = useProjectsStore.getState().projects.find((p) => p.id === id)
-  if (!project) return
+  if (!project) return false
 
   const payload = serializeProject(project)
   const serialized = JSON.stringify(payload)
   if (serialized === lastSynced.get(id)) {
     clearPending(id)
-    return
+    return true
   }
 
   inFlight.add(id)
-  try {
-    if (serverKnownIds.has(id)) {
-      await updateProject(payload, init)
-    } else {
-      await createProject(payload, init)
-    }
-    if (generation !== syncGeneration) return
-    serverKnownIds.add(id)
-    lastSynced.set(id, serialized)
-    clearPending(id)
-    clearSaveFailure()
-  } catch (e) {
-    if (generation !== syncGeneration) return
-    if (e instanceof ApiError) {
-      // 401: api.ts already cleared auth and the UI gates to login. Stay
-      // pending until the session teardown resets this sync instance.
-      if (e.status === 401) return
-      // Unlike network/5xx failures, a capability denial will not heal on a
-      // timer. Stop all project writes for this session so it cannot become a
-      // permanent PUT/403 loop. Signing in again reselects persistence mode.
-      if (e.status === 403) {
-        reportAuthorizationFailure()
-        return
+  const write = (async () => {
+    try {
+      if (serverKnownIds.has(id)) {
+        await updateProject(payload, init)
+      } else {
+        await createProject(payload, init)
       }
-      // The doc vanished server-side (e.g. wiped DB): recreate on next flush.
-      if (e.status === 404 && serverKnownIds.has(id)) serverKnownIds.delete(id)
-      // A duplicate id on POST means the doc exists after all: PUT next time.
-      if (e.status === 409 && !serverKnownIds.has(id)) serverKnownIds.add(id)
+      if (generation !== syncGeneration) return false
+      serverKnownIds.add(id)
+      lastSynced.set(id, serialized)
+      clearPending(id)
+      clearSaveFailure()
+      return true
+    } catch (e) {
+      if (generation !== syncGeneration) return false
+      if (e instanceof ApiError) {
+        // 401: api.ts already cleared auth and the UI gates to login. Stay
+        // pending until the session teardown resets this sync instance.
+        if (e.status === 401) return false
+        // Unlike network/5xx failures, a capability denial will not heal on a
+        // timer. Stop all project writes for this session so it cannot become a
+        // permanent PUT/403 loop. Signing in again reselects persistence mode.
+        if (e.status === 403) {
+          reportAuthorizationFailure()
+          return false
+        }
+        // The doc vanished server-side (e.g. wiped DB): recreate on next flush.
+        if (e.status === 404 && serverKnownIds.has(id))
+          serverKnownIds.delete(id)
+        // A duplicate id on POST means the doc exists after all: PUT next time.
+        if (e.status === 409 && !serverKnownIds.has(id)) serverKnownIds.add(id)
+      }
+      reportSaveFailure()
+      return false
     }
-    reportSaveFailure()
+  })()
+  inFlightWrites.set(id, write)
+  try {
+    return await write
   } finally {
+    inFlightWrites.delete(id)
     if (generation === syncGeneration) {
       inFlight.delete(id)
       if (changedWhileInFlight.delete(id) && !writesForbidden) scheduleFlush(id)
@@ -454,6 +475,31 @@ async function removeProject(id: string) {
     if (!(e instanceof ApiError && e.status === 404)) return
   }
   serverKnownIds.delete(id)
+}
+
+/**
+ * Checkpoint the active project and, in server mode, wait for the server to
+ * acknowledge it. Resolves to whether it is now safely saved.
+ *
+ * This is the one save the caller must be able to *wait* on: deploying is the
+ * moment a project stops being a sketch and starts naming real VMs, so it has to
+ * be attributable to a persisted snapshot rather than to whatever happened to be
+ * on screen. Everything else in this module is deliberately fire-and-forget.
+ */
+export async function saveActiveProjectNow(): Promise<boolean> {
+  const store = useProjectsStore.getState()
+  const id = store.activeProjectId
+  if (!id) return true
+  // Copy the working stores into the snapshot first — otherwise this would
+  // faithfully persist the state as of the last checkpoint and report success.
+  store.saveActiveSnapshot()
+  // Local mode writes synchronously through the persist middleware.
+  if (!isServerPersistence()) return true
+  // `saveActiveSnapshot`'s dirty true→false already triggered an immediate
+  // flush; let it finish before adding another, so the second call sees the
+  // final serialization and short-circuits instead of racing.
+  await inFlightWrites.get(id)?.catch(() => false)
+  return flushProject(id)
 }
 
 export function flushAllPending(opts?: { keepalive?: boolean }) {

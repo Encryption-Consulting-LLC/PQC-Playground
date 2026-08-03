@@ -31,6 +31,15 @@ vi.mock("@/lib/api", async (importOriginal) => {
   }
 })
 
+const saveActiveProjectNowMock = vi.fn(async () => true)
+vi.mock("@/lib/projectSync", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/projectSync")>()
+  return {
+    ...actual,
+    saveActiveProjectNow: () => saveActiveProjectNowMock(),
+  }
+})
+
 let handlers: JobSocketHandlers | null = null
 vi.mock("@/lib/ws", () => ({
   openJobSocket: vi.fn(
@@ -106,6 +115,8 @@ function state() {
 beforeEach(() => {
   handlers = null
   deployPlanMock.mockReset()
+  saveActiveProjectNowMock.mockReset()
+  saveActiveProjectNowMock.mockResolvedValue(true)
   seed()
 })
 
@@ -214,6 +225,34 @@ test("a plain failure leaves no receipt and phase updates are ignored while idle
   state().deploy()
   await vi.waitFor(() => expect(state().deploying).toBe(false))
   expect(state().preflightReceipt).toBeNull()
+  expect(state().planPhase).toBeNull()
+})
+
+test("deploy saves the project before sending the plan", async () => {
+  deployPlanMock.mockResolvedValue({ job_id: "job9", preflight: null })
+
+  state().deploy()
+  await vi.waitFor(() => expect(state().deployJobId).toBe("job9"))
+
+  expect(saveActiveProjectNowMock).toHaveBeenCalledOnce()
+  // A deploy names real VMs after the project; the snapshot has to exist first.
+  expect(saveActiveProjectNowMock.mock.invocationCallOrder[0]).toBeLessThan(
+    deployPlanMock.mock.invocationCallOrder[0],
+  )
+})
+
+test("a project that cannot be saved is not deployed", async () => {
+  saveActiveProjectNowMock.mockResolvedValue(false)
+
+  state().deploy()
+  await vi.waitFor(() => expect(state().deploying).toBe(false))
+
+  expect(deployPlanMock).not.toHaveBeenCalled()
+  // Fully unwound: the ops are staged again and the canvas lock is released.
+  expect(state().ops.every((op) => op.status === lib.OP_STATUS.staged)).toBe(
+    true,
+  )
+  expect(state().deployJobId).toBeNull()
   expect(state().planPhase).toBeNull()
 })
 

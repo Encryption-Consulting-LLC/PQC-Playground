@@ -57,6 +57,7 @@ import {
 } from "@/lib/ws"
 import { useAuthStore } from "@/store/auth"
 import { useProjectsStore } from "@/store/projects"
+import { saveActiveProjectNow } from "@/lib/projectSync"
 import { useTopologyStore } from "@/store/topology"
 
 /** Reverts one op's optimistic canvas effect — the inverse of whatever `store/topology.ts` applied when it was staged. */
@@ -1002,7 +1003,24 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
       }),
     })
 
-    deployPlan(prepared.payload, prepared.topology, prepared.projectId)
+    // Save before deploying, and refuse if the save doesn't land. A deploy names
+    // real VMs after `projectId`, so a plan whose project was never persisted
+    // leaves machines attributed to a project that does not exist — which is
+    // exactly what happened before this: registry rows and plan runs pointing at
+    // ids no `projects` document ever matched.
+    saveActiveProjectNow()
+      .then((saved) => {
+        if (!saved) {
+          throw new Error(
+            "Couldn't save this project — deploy cancelled so nothing runs against an unsaved topology.",
+          )
+        }
+        return deployPlan(
+          prepared.payload,
+          prepared.topology,
+          prepared.projectId,
+        )
+      })
       .then(({ job_id, preflight }) => {
         set({
           deployJobId: job_id,
