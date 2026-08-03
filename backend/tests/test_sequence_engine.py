@@ -921,6 +921,123 @@ def test_reboot_recovery_is_one_shot():
     assert commands == ["dc.install_forest", "system.reboot", "dc.install_forest"]
 
 
+def test_a_failed_post_reboot_attempt_falls_through_to_the_retry_schedule():
+    """A feature install stalled in Server Manager carries both a signature and
+    a schedule: reboot first (it clears the pending mark the image shipped), and
+    if that attempt still fails, keep walking the backoff instead of going
+    terminal on the recovery."""
+    clock = FakeClock()
+    keys = []
+    stall = "Install-WindowsFeature : The request for the server to discover installed features timed out."
+
+    def dispatch(job_key, _vm, command, *_args, **_kwargs):
+        keys.append(job_key)
+        if command != "iis.setup_certenroll":
+            return {"rebooting": True}
+        if len(keys) < 4:  # attempt 1, the post-reboot attempt, then one retry
+            raise SequenceError(stall)
+        return {"scope": "web"}
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+    result = engine.run(
+        [
+            Step(
+                id="iis-web",
+                command="iis.setup_certenroll",
+                target="primary",
+                timeout_s=2700,
+                retry_delays_s=(60, 180),
+                reboot_recovery_signatures=(
+                    "getenumerationstate_timeout",
+                    "discover installed features",
+                ),
+            )
+        ],
+        _ctx(),
+    )
+
+    assert result["iis-web"] == {"scope": "web"}
+    assert keys == [
+        "iis-web",
+        "iis-web.rebootrecover",
+        "iis-web.postreboot",
+        "iis-web.retry.1",
+    ]
+    # Only the first schedule delay was spent; the reboot is not a retry slot.
+    assert clock.t == 60_000
+
+
+def test_a_step_with_a_signature_and_no_schedule_stays_one_shot():
+    """`install-forest` carries a signature but no schedule — the fall-through
+    must not turn its single recovery into an open-ended retry loop."""
+    clock = FakeClock()
+    commands = []
+
+    def dispatch(_key, _vm, command, *_args, **_kwargs):
+        commands.append(command)
+        if command == "dc.install_forest":
+            raise SequenceError(_PREREQ_DETAIL)
+        return {"ok": True}
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    with pytest.raises(SequenceError, match="needs to be restarted"):
+        engine.run([_forest_step()], _ctx())
+    assert commands == ["dc.install_forest", "system.reboot", "dc.install_forest"]
+    assert clock.t == 0
+
+
+def test_a_timed_out_post_reboot_attempt_is_never_redispatched():
+    """The no-retry-on-timeout rule survives the fall-through: the command may
+    still be running on the guest."""
+    clock = FakeClock()
+    keys = []
+
+    class Timeout(SequenceError):
+        timed_out = True
+
+    def dispatch(job_key, _vm, command, *_args, **_kwargs):
+        keys.append(job_key)
+        if command != "iis.setup_certenroll":
+            return {"rebooting": True}
+        if len(keys) == 1:
+            raise SequenceError("discover installed features timed out")
+        raise Timeout("agent command 'iis.setup_certenroll' timed out after 2700s")
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+
+    with pytest.raises(SequenceError, match="timed out after 2700s"):
+        engine.run(
+            [
+                Step(
+                    id="iis-web",
+                    command="iis.setup_certenroll",
+                    target="primary",
+                    retry_delays_s=(60, 180),
+                    reboot_recovery_signatures=("discover installed features",),
+                )
+            ],
+            _ctx(),
+        )
+    assert keys == ["iis-web", "iis-web.rebootrecover", "iis-web.postreboot"]
+    assert clock.t == 0
+
+
 def test_failed_recovery_reboot_surfaces_the_original_failure():
     clock = FakeClock()
 

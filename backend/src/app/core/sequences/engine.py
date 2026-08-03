@@ -242,8 +242,9 @@ class SequenceEngine:
         A failure whose detail matches ``step.reboot_recovery_signatures`` gets
         one extra shot behind a reboot — the target refused the command only
         because it has a restart pending, which no amount of redispatching on the
-        same boot can clear. That recovery is one-shot and independent of
-        ``retry_delays_s`` (which covers transient service failures).
+        same boot can clear. That recovery is one-shot, and it *precedes*
+        ``retry_delays_s`` rather than replacing it: a step carrying both takes
+        the reboot first and then still walks its schedule if that didn't take.
 
         A *timeout* is never retried, whatever the schedule says: giving up on
         the wait doesn't stop the command on the guest, so a second dispatch
@@ -256,10 +257,12 @@ class SequenceEngine:
         """
 
         attempt = 0
+        dispatches = 0
         recovered = False
         first_exc: Exception | None = None
         while True:
             job_key = step.id if attempt == 0 else f"{step.id}.retry.{attempt}"
+            dispatches += 1
             try:
                 return self._dispatch(
                     job_key,
@@ -287,13 +290,27 @@ class SequenceEngine:
                 signature = _reboot_recovery_signature(step, exc)
                 if signature is not None and not recovered:
                     recovered = True
-                    return self._reboot_and_redispatch(
-                        step, vm_id, params, signature, exc
-                    )
+                    try:
+                        return self._reboot_and_redispatch(
+                            step, vm_id, params, signature, exc
+                        )
+                    except Exception as recovery_exc:  # noqa: BLE001 - same boundary
+                        # A recovery that didn't take is not terminal by itself:
+                        # fall through to the step's own retry schedule, so a
+                        # signature *precedes* the backoff rather than replacing
+                        # it. A timed-out redispatch still stops here.
+                        if getattr(recovery_exc, "timed_out", False):
+                            raise
+                        # A reboot that couldn't happen re-raises the *original*
+                        # failure, so a distinct exception means the redispatch
+                        # ran — and counts as an attempt.
+                        if recovery_exc is not exc:
+                            dispatches += 1
+                        exc = recovery_exc
                 if attempt >= len(step.retry_delays_s):
                     if first_exc is exc:
                         raise
-                    raise _combined_failure(first_exc, exc, attempt + 1) from exc
+                    raise _combined_failure(first_exc, exc, dispatches) from exc
                 delay = step.retry_delays_s[attempt]
                 attempt += 1
                 logger.warning(
