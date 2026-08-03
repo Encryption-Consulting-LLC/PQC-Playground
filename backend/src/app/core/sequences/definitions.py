@@ -70,9 +70,11 @@ _OCSP_RETRY = (10, 20, 40, 60, 90)
 # multi-cmdlet service configuration the medium one. Everything else keeps the
 # 300s ``Step`` default, which covers a single cmdlet or a read-only probe.
 #
-# Role-change steps carry no ``retry_delays_s`` on purpose: a timeout does not
-# stop the command on the guest, so redispatching would race a second
-# Install-WindowsFeature against the first. One long attempt, then fail.
+# A role change that *timed out* is never redispatched — giving up on the wait
+# does not stop the command on the guest, so a second dispatch would race a
+# second Install-WindowsFeature against the first. That rule lives in the engine
+# (it reads the adapter's ``timed_out`` marker), so a role-change step may still
+# carry ``retry_delays_s`` for the guest-side failures a retry does fix.
 _CA_INSTALL_S = 2700
 _ROLE_CHANGE_S = 1800
 _SERVICE_OP_S = 900
@@ -86,6 +88,20 @@ _DCPROMO_REBOOT_PENDING = (
     "needs to be restarted",
     "role change is in progress",
 )
+
+# Server Manager's own timeout while enumerating installed features — what an
+# `Install-WindowsFeature` raises when it has to rebuild the CBS enumeration
+# from scratch (a pending reboot mark stops TrustedInstaller from populating
+# `C:\Windows\ServerManager`) and the rebuild overruns its window. The error id
+# is not localized; the message text is the fallback for other builds.
+_SERVER_MANAGER_STALL = (
+    "getenumerationstate_timeout",
+    "discover installed features",
+)
+#: Backoff for a stalled feature install. Deliberately long: a stall burns ~17
+#: minutes before it fails, so the delay is noise next to the attempt, and an
+#: ``_AD_RETRY``-style 10s start would just re-enter CBS before it settled.
+_FEATURE_RETRY = (60, 180, 300)
 
 
 def _admin_username(netbios: str | None) -> str:
@@ -335,6 +351,8 @@ def _root_ca_provision() -> list[Step]:
             verify=_ca_verify_step(),
             verify_predicate=lambda r: r.get("ping_ok") is True,
             timeout_s=_CA_INSTALL_S,
+            retry_delays_s=_FEATURE_RETRY,
+            reboot_recovery_signatures=_SERVER_MANAGER_STALL,
         ),
         Step(
             id="ca-settings",
@@ -617,6 +635,8 @@ def _domain_join_sequence(ctx: RunContext) -> list[Step]:
                     ),
                 },
                 timeout_s=_ROLE_CHANGE_S,
+                retry_delays_s=_FEATURE_RETRY,
+                reboot_recovery_signatures=_SERVER_MANAGER_STALL,
             )
         )
 
@@ -810,6 +830,8 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
                 "path": rt.node.template_config.get("certEnrollPath", "C:\\CertEnroll"),
             },
             timeout_s=_ROLE_CHANGE_S,
+            retry_delays_s=_FEATURE_RETRY,
+            reboot_recovery_signatures=_SERVER_MANAGER_STALL,
         ),
         Step(
             id="ocsp-install",
@@ -1285,6 +1307,8 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
             params=issuing_install_params,
             secret_keys=("password",),
             timeout_s=_CA_INSTALL_S,
+            retry_delays_s=_FEATURE_RETRY,
+            reboot_recovery_signatures=_SERVER_MANAGER_STALL,
         ),
         Step(
             id="read-csr",

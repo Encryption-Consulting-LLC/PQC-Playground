@@ -15,6 +15,7 @@ from app.core.sequences.definitions import (  # noqa: E402
     provision_steps,
     teardown_action_sequence,
 )
+from app.core.sequences.engine import _reboot_recovery_signature  # noqa: E402
 from app.core.sequences.model import DnsRecordContext, NodeContext, RunContext  # noqa: E402
 from app.core.sequences.model import Step  # noqa: E402
 from app.tasks import _run_sequence_op  # noqa: E402
@@ -185,6 +186,69 @@ def test_no_windows_role_change_is_left_on_the_default_timeout():
         assert step.timeout_s >= 1800, f"{step.id} ({step.command})"
     assert {"iis.setup_certenroll", "ocsp.install", "ca.install"} <= checked
     assert {"ocsp.remove", "iis.remove_certenroll", "ca.uninstall"} <= checked
+
+
+def test_no_windows_role_change_is_left_without_a_recovery_path():
+    """The companion invariant to the timeout one: a role change must be able to
+    survive one failure, either by retrying or by rebooting first. A guest-side
+    stall is retryable (only *dispatch* timeouts are not — the engine refuses
+    those whatever the schedule says)."""
+    steps = _all_role_change_steps()
+    naked = [
+        f"{step.id} ({step.command})"
+        for step in steps
+        if not step.retry_delays_s and not step.reboot_recovery_signatures
+    ]
+    assert naked == []
+    checked = {step.command for step in steps}
+    assert {"iis.setup_certenroll", "ocsp.install", "ca.install"} <= checked
+    assert {"ocsp.remove", "iis.remove_certenroll", "ca.uninstall"} <= checked
+
+
+def test_feature_installs_recover_from_a_server_manager_stall():
+    by_id = {step.id: step for step in _all_role_change_steps()}
+    for step_id in ("iis-web", "iis-share", "ca-install", "install-issuing"):
+        step = by_id[step_id]
+        assert step.retry_delays_s, step_id
+        assert "getenumerationstate_timeout" in step.reboot_recovery_signatures
+
+
+def test_the_prod_server_manager_stall_detail_matches_a_recovery_signature():
+    """Verbatim from `plan_runs` job 5fd68414aff44884b9d77f2b6d319400, op
+    4f595dfe-f883-4374-b8d9-f058f436230b (`iis-web`) — the failure this recovery
+    exists for. Anchored here so a reworded signature can't silently stop
+    matching it. Both signatures are exercised because PowerShell wraps its
+    error block at console width and can split either token."""
+    detail = (
+        "agent command 'iis.setup_certenroll' failed: powershell execution "
+        "failed: script exited with code 1: Install-WindowsFeature : The "
+        "request for the server to discover installed features timed out.\r\n"
+        "At C:\\WINDOWS\\SystemTemp\\pki-executor-fIVoIr.ps1:1 char:503\r\n"
+        "+ ...  'share') { Install-WindowsFeature Web-Server "
+        "-IncludeManagementTools ...\r\n"
+        "    + CategoryInfo          : OperationTimeout: (@{Vhd=; "
+        "Credent...Name=localhost}:PSObject) [Install-WindowsFeature], \r\n"
+        "    DeploymentProviderException\r\n"
+        "    + FullyQualifiedErrorId : GetEnumerationState_Timeout,"
+        "Microsoft.Windows.ServerManager.Commands.AddWindowsFeatureCo \r\n"
+        "   mmand\r\n"
+    )
+    iis_web = next(
+        step
+        for step in op_sequence("webServerCert", _web_ctx())
+        if step.id == "iis-web"
+    )
+
+    assert (
+        _reboot_recovery_signature(iis_web, RuntimeError(detail))
+        == "getenumerationstate_timeout"
+    )
+    # The English message text is the fallback when the wrap lands on the id.
+    truncated = detail.replace("GetEnumerationState_Timeout", "GetEnumerationState_")
+    assert (
+        _reboot_recovery_signature(iis_web, RuntimeError(truncated))
+        == "discover installed features"
+    )
 
 
 def test_provision_tail_always_settles_the_inherited_reboot_first():
