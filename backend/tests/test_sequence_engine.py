@@ -336,6 +336,37 @@ def test_completed_steps_skip_on_resume():
     assert ran == ["ca.publish_crl"]  # 'a' was already done
 
 
+def test_a_resumed_step_is_reported_finished_not_left_started():
+    """`run` announces every step through `on_step_start`, including one the cursor
+    says is already done. Without a matching terminal notification, a redelivered
+    task left that step's row spinning for the rest of the plan."""
+    clock = FakeClock()
+    started, skipped, done = [], [], []
+
+    engine = SequenceEngine(
+        dispatch=lambda *a, **k: {},
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+        completed={"a"},
+        on_step_start=started.append,
+        on_step_skipped=skipped.append,
+        on_step_done=lambda step_id, _result: done.append(step_id),
+    )
+    engine.run(
+        [
+            Step(id="a", command="ca.install", target="primary"),
+            Step(id="b", command="ca.publish_crl", target="primary"),
+        ],
+        _ctx(),
+    )
+
+    assert started == ["a", "b"]
+    assert skipped == ["a"]
+    # Not `on_step_done`: the cursor already has 'a', so nothing is re-persisted.
+    assert done == ["b"]
+
+
 def test_completed_results_feed_resumable_aggregate():
     clock = FakeClock()
     aggregate_inputs = {}

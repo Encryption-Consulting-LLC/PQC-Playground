@@ -21,7 +21,9 @@ redis, Mongo, or a real agent:
 Resume: a ``completed`` set (from the ``plan_runs`` cursor) skips already-run
 steps on Celery redelivery; ``on_step_done(step_id, result)`` persists the
 cursor + any produced artifacts after each step so a mid-sequence redelivery
-picks up where it left off. Reboot waits use a *timestamp compare* (reconnect
+picks up where it left off, and ``on_step_skipped(step_id)`` reports a step the
+cursor says is already done (every step is announced via ``on_step_start``, so
+without it a resumed step's row spins forever). Reboot waits use a *timestamp compare* (reconnect
 time > dispatch time) plus the current liveness key, immune both to a fast
 reboot that reconnects before polling and a reconnect that immediately drops.
 """
@@ -114,6 +116,7 @@ class SequenceEngine:
         resumed_results: dict[str, dict] | None = None,
         on_step_done: Callable[[str, dict], None] | None = None,
         on_step_start: Callable[[str], None] | None = None,
+        on_step_skipped: Callable[[str], None] | None = None,
         on_verify_start: Callable[[str], None] | None = None,
         on_verify_done: Callable[[str], None] | None = None,
         should_stop: Callable[[], bool] | None = None,
@@ -130,6 +133,7 @@ class SequenceEngine:
         self._resumed_results = resumed_results if resumed_results is not None else {}
         self._on_step_done = on_step_done or (lambda _s, _r: None)
         self._on_step_start = on_step_start or (lambda _s: None)
+        self._on_step_skipped = on_step_skipped or (lambda _s: None)
         self._on_verify_start = on_verify_start or (lambda _s: None)
         self._on_verify_done = on_verify_done or (lambda _s: None)
         self._should_stop = should_stop or (lambda: False)
@@ -159,6 +163,11 @@ class SequenceEngine:
 
         if step.id in self._completed:
             logger.info("sequence step %s already complete — skipping", step.id)
+            # `run` announced this step as started; without a matching terminal
+            # notification the redelivered task leaves its row spinning for the
+            # rest of the plan. It is not `on_step_done`: nothing needs
+            # re-persisting (the cursor already has it), only reporting.
+            self._on_step_skipped(step.id)
             # Its artifacts were restored into ctx by the caller from plan_runs.
             return self._resumed_results.get(step.id, {})
 

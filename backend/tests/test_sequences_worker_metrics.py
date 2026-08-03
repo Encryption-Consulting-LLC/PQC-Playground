@@ -425,6 +425,25 @@ def test_a_provision_ops_wait_rows_lead_its_ordinals():
     assert pushes[-1].percent == pytest.approx(50.0, abs=0.1)
 
 
+def test_a_skipped_step_lands_done_along_with_its_verify_row():
+    """A redelivery resumes mid-sequence. The cursor only records a step after its
+    probe passed, so both rows are genuinely done — and the row the panel shows
+    must say so rather than spinning for the rest of the plan."""
+    callbacks, pushes = _progress(
+        order=["dns-set", "reboot", "reboot.verify", "dns-apply"]
+    )
+    callbacks.start("dns-set")
+    callbacks.skipped("dns-set")
+    callbacks.start("reboot")
+    callbacks.skipped("reboot")
+
+    final = pushes[-1]
+    assert final.steps["dns-set"].status == "done"
+    assert final.steps["reboot"].status == "done"
+    assert final.steps["reboot.verify"].status == "done"
+    assert final.percent == pytest.approx(75.0, abs=0.1)
+
+
 def test_a_row_the_manifest_does_not_know_never_raises():
     """A mislabelled step must not fail the deployment it is describing."""
     callbacks, pushes = _progress(order=["dns-set", "domain-join"])

@@ -854,6 +854,7 @@ def _run_provision_op(
                 on_step_progress=on_step_progress,
                 on_step_tick=on_step_tick,
                 on_step_start=callbacks.start,
+                on_step_skipped=callbacks.skipped,
                 on_verify_start=callbacks.verify_start,
                 on_verify_done=callbacks.verify_done,
                 should_stop=lambda: transport.cancel_mode(job_id) == "step",
@@ -1277,11 +1278,14 @@ def _step_median_seconds(db, steps) -> dict[str, float]:
 class _SequenceCallbacks:
     """Three legacy callbacks plus explicit step lifecycle callbacks."""
 
-    def __init__(self, complete, progress, tick, start, verify_start, verify_done):
+    def __init__(
+        self, complete, progress, tick, start, skipped, verify_start, verify_done
+    ):
         self.complete = complete
         self.progress = progress
         self.tick = tick
         self.start = start
+        self.skipped = skipped
         self.verify_start = verify_start
         self.verify_done = verify_done
 
@@ -1394,6 +1398,19 @@ def _sequence_progress(
         steps[step_id] = StepRunState(status="running", percent=pct, phase=label)
         _push_running(_overall(steps, pct), label, steps)
 
+    def on_step_skipped(step_id: str) -> None:
+        """A redelivered task's already-completed step. The verify row goes with
+        it: the resume cursor only records a step *after* its probe passed, so
+        both really are done — and leaving the probe grey would understate the
+        progress of a plan that has already done the work."""
+        steps = _steps()
+        for row_id in (step_id, f"{step_id}.verify"):
+            if row_id in positions:
+                steps[row_id] = StepRunState(
+                    status="done", percent=100.0, phase="Already complete"
+                )
+        _push_running(_overall(steps), _row_label(step_id), steps)
+
     def on_verify_start(step_id: str) -> None:
         steps = _steps()
         steps[step_id] = StepRunState(status="running", percent=0.0)
@@ -1409,6 +1426,7 @@ def _sequence_progress(
         on_step_progress,
         on_step_tick,
         on_step_start,
+        on_step_skipped,
         on_verify_start,
         on_verify_done,
     )
@@ -1482,6 +1500,7 @@ def _run_sequence_op(
             on_step_progress=on_step_progress,
             on_step_tick=on_step_tick,
             on_step_start=callbacks.start,
+            on_step_skipped=callbacks.skipped,
             on_verify_start=callbacks.verify_start,
             on_verify_done=callbacks.verify_done,
             should_stop=lambda: transport.cancel_mode(job_id) == "step",
