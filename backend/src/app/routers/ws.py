@@ -6,7 +6,8 @@ just clones. Mounted under ``/api`` → ``ws /api/ws/jobs/{job_id}``.
 Auth: browsers can't set custom headers on the WS upgrade, so the session token
 (a backend-minted JWT) comes as a ``?token=`` query param and is resolved by the
 same ``resolve_user_token`` the HTTP dependency uses. Close codes: 4401
-(bad/absent token), 4404 (unknown/expired job — no snapshot in Valkey).
+(bad/absent token), 4403 (someone else's deployment), 4404 (unknown job — no
+snapshot in Valkey *and* nothing persisted to replay).
 
 Every rejection ``accept()``s the upgrade *before* closing. Closing a WebSocket
 that was never accepted makes the ASGI server reject the handshake with a plain
@@ -18,16 +19,20 @@ silent transport failure instead of its real outcome.
 Job state and live messages live in Valkey (see ``transport``), not in this
 process, so this works the same whether the job is being run by a local worker or
 one on another host, and the API can be scaled to multiple replicas without sticky
-routing.
+routing. Valkey snapshots expire, though, so a deploy plan whose snapshot is gone
+falls back to its persisted ``plan_runs`` document (see ``jobs.replay``) — that's
+what lets a tab reopened hours later still learn how the deploy ended.
 """
 
 import json
 
 from fastapi import APIRouter, WebSocket, WebSocketDisconnect
 
-from app.core.authz import resolve_user_token
+from app.core.authz import Role, resolve_user_token
+from app.core.db import now_ms, plan_runs_col
 from app.core.jobs import transport
 from app.core.jobs.models import TERMINAL_TYPES
+from app.core.jobs.replay import replay_plan_run
 
 router = APIRouter(prefix="/ws", tags=["ws"])
 
@@ -60,7 +65,8 @@ async def send_json_or_disconnect(websocket: WebSocket, payload: dict) -> None:
 async def job_progress(
     websocket: WebSocket, job_id: str, token: str | None = None
 ) -> None:
-    if await resolve_user_token(token) is None:
+    user = await resolve_user_token(token)
+    if user is None:
         await reject(websocket, 4401)
         return
 
@@ -73,13 +79,34 @@ async def job_progress(
         await pubsub.subscribe(transport.channel(job_id))
 
         snapshot = await transport.read_snapshot(redis_client, job_id)
+        replayed: list[dict] = []
         if snapshot is None:
-            await reject(websocket, 4404)
-            return
+            # No live snapshot: the job may still be a deploy plan whose state
+            # outlives Valkey. Unlike the snapshot (which only the job's own id
+            # can address), this reads a user-attributed document, so it carries
+            # the same ownership rule as the HTTP deploy routes.
+            run = await plan_runs_col().find_one({"jobId": job_id})
+            if run is None:
+                await reject(websocket, 4404)
+                return
+            if user.role is not Role.OPERATOR and run.get("owner") != user.username:
+                await reject(websocket, 4403)
+                return
+            outcome = replay_plan_run(run, now_ms=now_ms())
+            if outcome is None:
+                await reject(websocket, 4404)
+                return
+            _, messages = outcome
+            replayed = [msg.model_dump() for msg in messages]
 
         await websocket.accept()
 
-        last = snapshot["last"]
+        for msg in replayed:
+            await send_json_or_disconnect(websocket, msg)
+            if msg["type"] in TERMINAL_TYPES:
+                return
+
+        last = snapshot["last"] if snapshot is not None else None
         if last is not None:
             await send_json_or_disconnect(websocket, last)
             if last["type"] in TERMINAL_TYPES:

@@ -88,6 +88,7 @@ from app.core.jobs.models import (
     ProgressMsg,
     RunningMsg,
 )
+from app.core.jobs.replay import PLAN_TERMINAL_STATUSES
 
 
 logger = logging.getLogger(__name__)
@@ -1620,7 +1621,8 @@ def _initialize_plan_run(
     )
 
 
-_PLAN_TERMINAL = frozenset({"done", "error", "cancelled"})
+#: Shared with the cold replay path so "this plan is over" is decided once.
+_PLAN_TERMINAL = PLAN_TERMINAL_STATUSES
 
 
 def ready_plan_operations(ops, statuses: dict[str, str]) -> tuple[list[str], list[str]]:

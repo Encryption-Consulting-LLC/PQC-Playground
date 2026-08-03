@@ -24,7 +24,7 @@ from app.core.jobs.models import JobStatus, Message
 from app.core.settings import settings
 
 #: How long a snapshot survives while the job is still active / after it ends.
-_ACTIVE_TTL_SECONDS = 3600
+ACTIVE_TTL_SECONDS = 3600
 _TERMINAL_TTL_SECONDS = 600
 
 #: One shared sync client; cheap, thread-safe connection pool under the hood.
@@ -58,9 +58,9 @@ def request_cancel(job_id: str, mode: str, reason: str | None = None) -> None:
     if mode not in ("step", "operation"):
         raise ValueError("cancel mode must be 'step' or 'operation'")
     pipe = _client.pipeline()
-    pipe.set(cancel_key(job_id), mode, ex=_ACTIVE_TTL_SECONDS)
+    pipe.set(cancel_key(job_id), mode, ex=ACTIVE_TTL_SECONDS)
     if reason:
-        pipe.set(cancel_reason_key(job_id), reason, ex=_ACTIVE_TTL_SECONDS)
+        pipe.set(cancel_reason_key(job_id), reason, ex=ACTIVE_TTL_SECONDS)
     pipe.execute()
 
 
@@ -82,7 +82,7 @@ def publish(
     """
     payload = msg.model_dump_json()
     snapshot = json.dumps({"status": status.value, "last": json.loads(payload)})
-    ttl = _TERMINAL_TTL_SECONDS if terminal else _ACTIVE_TTL_SECONDS
+    ttl = _TERMINAL_TTL_SECONDS if terminal else ACTIVE_TTL_SECONDS
     pipe = _client.pipeline()
     pipe.set(snapshot_key(job_id), snapshot, ex=ttl)
     pipe.publish(channel(job_id), payload)
