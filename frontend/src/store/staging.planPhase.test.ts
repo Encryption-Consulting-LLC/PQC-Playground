@@ -1,8 +1,8 @@
 /**
  * Pre-execution deploy phases: the posting → queued → preparing → executing
  * walk driven by the plan job stream, the no-walking-backwards guard on late
- * replays, and the preflight receipt captured from both the 202 and a
- * structured 409.
+ * replays, the preflight receipt captured from both the 202 and a structured
+ * 409, and how a stream that dies mid-plan unwinds the canvas.
  */
 
 import { beforeAll, beforeEach, expect, test, vi } from "vitest"
@@ -40,6 +40,8 @@ vi.mock("@/lib/ws", () => ({
     },
   ),
   openAgentsSocket: vi.fn(() => vi.fn()),
+  WS_CLOSE_JOB_GONE: 4404,
+  WS_CLOSE_UNAUTHORIZED: 4401,
 }))
 
 let staging: typeof import("@/store/staging")
@@ -213,4 +215,53 @@ test("a plain failure leaves no receipt and phase updates are ignored while idle
   await vi.waitFor(() => expect(state().deploying).toBe(false))
   expect(state().preflightReceipt).toBeNull()
   expect(state().planPhase).toBeNull()
+})
+
+/** Deploys until the plan socket is attached and its handlers are captured. */
+async function deployUntilStreaming() {
+  deployPlanMock.mockResolvedValue({ job_id: "job9", preflight: null })
+  state().deploy()
+  await vi.waitFor(() => expect(state().deployJobId).toBe("job9"))
+}
+
+/** An expired-job close: unrecoverable, so it unwinds without retrying first. */
+function loseStream() {
+  handlers!.onError!({
+    type: "error",
+    status: 0,
+    detail: "Progress connection closed before completion.",
+    code: 4404,
+  })
+}
+
+function node() {
+  return useTopologyStore.getState().nodes[0].data
+}
+
+test("a lost stream leaves a node whose clone landed as failed, not staged", async () => {
+  await deployUntilStreaming()
+  useTopologyStore.getState().patchNodeData("node-dc", {
+    lifecycle: LIFECYCLE.provisioning,
+    vmName: "guest-guest-afba6e-dc01",
+    ip: "192.168.181.6",
+  })
+
+  loseStream()
+
+  // `staged` would claim there is no VM yet; there is one, with an IP.
+  expect(node().lifecycle).toBe(LIFECYCLE.failed)
+  expect(node().errorDetail).toBeTruthy()
+  expect(node().vmName).toBe("guest-guest-afba6e-dc01")
+  // The op is still retryable, and the deploy lock is released either way.
+  expect(state().ops[0].status).toBe(lib.OP_STATUS.staged)
+  expect(state().deploying).toBe(false)
+})
+
+test("a lost stream still reverts a node with no VM to staged", async () => {
+  await deployUntilStreaming()
+
+  loseStream()
+
+  expect(node().lifecycle).toBe(LIFECYCLE.staged)
+  expect(node().errorDetail).toBeUndefined()
 })

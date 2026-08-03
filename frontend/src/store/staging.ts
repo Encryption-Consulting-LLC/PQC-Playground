@@ -577,10 +577,29 @@ export function applyPlanState(
  * `applyPlanState` when the `done` transition arrived, and they are the record
  * of how far the run got. They can't be re-sent — every path to the wire goes
  * through `prepareDeployPlan`, which drops them.
+ *
+ * A node whose clone already landed is the exception: `staged` means "no VM yet",
+ * and it has one — with an IP, a name, and possibly a half-installed role. It
+ * unwinds to `failed` instead, which keeps that identity (and the Tear down VM
+ * affordance) rather than inviting a second clone under the same name.
  */
 function revertNonTerminalToStaged(): void {
   const { ops } = useStagingStore.getState()
   const topology = useTopologyStore.getState()
+
+  const unwindNode = (nodeId: string) => {
+    const realized = !!useTopologyStore
+      .getState()
+      .nodes.find((n) => n.id === nodeId)?.data.vmName
+    topology.patchNodeData(nodeId, {
+      lifecycle: realized ? LIFECYCLE.failed : LIFECYCLE.staged,
+      progress: undefined,
+      phase: undefined,
+      errorDetail: realized
+        ? "Lost contact with the deployment before it was confirmed."
+        : undefined,
+    })
+  }
 
   const remaining: StagedOp[] = []
   for (const op of ops) {
@@ -593,21 +612,11 @@ function revertNonTerminalToStaged(): void {
       // unwind its node like any interrupted createVm — a `done` parent clone
       // won't be re-sent, so nobody else would reset the node out of
       // `provisioning`/`deploying`.
-      topology.patchNodeData(op.targetNodeId, {
-        lifecycle: LIFECYCLE.staged,
-        progress: undefined,
-        phase: undefined,
-        errorDetail: undefined,
-      })
+      unwindNode(op.targetNodeId)
       continue
     }
     if (op.kind === OP_KIND.createVm) {
-      topology.patchNodeData(op.targetNodeId, {
-        lifecycle: LIFECYCLE.staged,
-        progress: undefined,
-        phase: undefined,
-        errorDetail: undefined,
-      })
+      unwindNode(op.targetNodeId)
     }
     for (const edgeId of operationEdgeIds(op)) {
       topology.setEdgeHealth(edgeId, CONNECTION_HEALTH.planned)
