@@ -71,7 +71,10 @@ class ProjectDoc(MongoModel):
         default_factory=list, max_length=50, alias="stagedOps"
     )
     deploy_job_id: str | None = Field(default=None, alias="deployJobId")
-    # Stub — always None until users/ownership land.
+    #: Username this project belongs to — the only key every read and write is
+    #: filtered by (``routers/projects.py``). Optional solely because documents
+    #: created before ownership landed carry None; those are unreachable through
+    #: the scoped routes, which is the safe direction for an unattributable doc.
     owner: str | None = None
     schema_version: int = Field(default=1, alias="schemaVersion")
     created_at: int = Field(alias="createdAt")

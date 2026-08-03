@@ -93,7 +93,8 @@ async def _ensure_indexes() -> None:
         [
             # List endpoint sorts by recency.
             IndexModel([("updatedAt", DESCENDING)]),
-            # Per-owner listing; cheap to create now on all-null owner.
+            # What the list endpoint actually queries: every read is scoped to
+            # one owner and sorted by recency.
             IndexModel([("owner", ASCENDING), ("updatedAt", DESCENDING)]),
         ]
     )
