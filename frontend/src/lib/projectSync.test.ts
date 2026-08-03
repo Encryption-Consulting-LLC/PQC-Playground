@@ -17,8 +17,14 @@ vi.stubGlobal("window", {
 
 let initLocalProjects: typeof import("@/lib/projectSync")["initLocalProjects"]
 let initServerProjects: typeof import("@/lib/projectSync")["initServerProjects"]
+let releaseAccountProjects: typeof import("@/lib/projectSync")["releaseAccountProjects"]
 let stopServerProjects: typeof import("@/lib/projectSync")["stopServerProjects"]
 let useProjectsStore: typeof import("@/store/projects")["useProjectsStore"]
+
+/** Browser-local project storage is keyed per account — see persistenceMode.ts. */
+function drawer(username: string) {
+  return `${STORAGE_KEYS.projects}:${username}`
+}
 
 function project(id: string, name: string): Project {
   return {
@@ -36,8 +42,12 @@ function project(id: string, name: string): Project {
 }
 
 beforeAll(async () => {
-  ;({ initLocalProjects, initServerProjects, stopServerProjects } =
-    await import("@/lib/projectSync"))
+  ;({
+    initLocalProjects,
+    initServerProjects,
+    releaseAccountProjects,
+    stopServerProjects,
+  } = await import("@/lib/projectSync"))
   ;({ useProjectsStore } = await import("@/store/projects"))
 })
 
@@ -51,46 +61,88 @@ beforeEach(() => {
   storage.clear()
 })
 
+function persisted(username: string, ...projects: Project[]) {
+  storage.set(
+    drawer(username),
+    JSON.stringify({
+      state: {
+        projects,
+        activeProjectId: projects[0]?.id ?? null,
+        nextProjectNumber: 7,
+      },
+      version: 1,
+    }),
+  )
+}
+
 describe("local project session initialization", () => {
-  it("does not expose the previous operator's in-memory projects to a guest", async () => {
+  it("does not expose the previous account's in-memory projects to the next", async () => {
     useProjectsStore.setState({
       projects: [project("operator-project", "Operator project")],
       activeProjectId: "operator-project",
       nextProjectNumber: 2,
     })
-    storage.delete(STORAGE_KEYS.projects)
 
-    await initLocalProjects()
+    await initLocalProjects("bob")
 
     expect(useProjectsStore.getState().projects).toEqual([])
     expect(useProjectsStore.getState().activeProjectId).toBeNull()
   })
 
-  it("replaces operator state with the saved guest project set", async () => {
+  it("replaces live state with the signed-in account's saved project set", async () => {
     useProjectsStore.setState({
       projects: [project("operator-project", "Operator project")],
       activeProjectId: "operator-project",
       nextProjectNumber: 2,
     })
-    storage.set(
-      STORAGE_KEYS.projects,
-      JSON.stringify({
-        state: {
-          projects: [project("guest-project", "Guest project")],
-          activeProjectId: "guest-project",
-          nextProjectNumber: 7,
-        },
-        version: 1,
-      }),
-    )
+    persisted("alice", project("alice-project", "Alice project"))
 
-    await initLocalProjects()
+    await initLocalProjects("alice")
 
     expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual([
-      "guest-project",
+      "alice-project",
     ])
-    expect(useProjectsStore.getState().activeProjectId).toBe("guest-project")
+    expect(useProjectsStore.getState().activeProjectId).toBe("alice-project")
     expect(useProjectsStore.getState().nextProjectNumber).toBe(7)
+  })
+
+  it("keeps one account's persisted projects out of another's session", async () => {
+    // The reported bug: a project saved by whoever used this browser last
+    // showed up for the next person to sign in.
+    persisted("alice", project("alice-project", "Alice project"))
+
+    await initLocalProjects("bob")
+
+    expect(useProjectsStore.getState().projects).toEqual([])
+    // Alice's drawer is untouched — isolation, not deletion.
+    expect(storage.has(drawer("alice"))).toBe(true)
+
+    await initLocalProjects("alice")
+    expect(useProjectsStore.getState().projects.map((p) => p.id)).toEqual([
+      "alice-project",
+    ])
+  })
+
+  it("writes only into the signed-in account's drawer", async () => {
+    await initLocalProjects("bob")
+    useProjectsStore.getState().addProject()
+
+    expect(storage.has(drawer("bob"))).toBe(true)
+    expect(storage.has(drawer("alice"))).toBe(false)
+    // Never the bare, account-agnostic key that caused the leak.
+    expect(storage.has(STORAGE_KEYS.projects)).toBe(false)
+  })
+
+  it("detaches storage entirely on sign-out", async () => {
+    await initLocalProjects("bob")
+    useProjectsStore.getState().addProject()
+    const beforeSignOut = storage.get(drawer("bob"))
+
+    releaseAccountProjects()
+    // A late async update after sign-out must not land in anyone's drawer.
+    useProjectsStore.getState().addProject()
+
+    expect(storage.get(drawer("bob"))).toBe(beforeSignOut)
   })
 
   it("does not retry a permanent project-write 403", async () => {
@@ -130,7 +182,7 @@ describe("local project session initialization", () => {
     )
     vi.stubGlobal("fetch", fetchMock)
 
-    await initServerProjects()
+    await initServerProjects("olivia")
     useProjectsStore.getState().renameProject(serverProject.id, "First edit")
     await vi.advanceTimersByTimeAsync(1_500)
     expect(

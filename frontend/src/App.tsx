@@ -18,8 +18,8 @@ import { initProjectAutosave } from "@/lib/projectAutosave"
 import {
   initLocalProjects,
   initServerProjects,
+  releaseAccountProjects,
   retryInitServerProjects,
-  stopServerProjects,
   useProjectSyncStore,
 } from "@/lib/projectSync"
 
@@ -53,17 +53,22 @@ function App() {
   const initializedSession = useRef<string | null>(null)
   useEffect(() => {
     if (!sessionReady) {
-      if (initializedSession.current) stopServerProjects()
+      // Sign-out: detach browser storage from the account and clear the store,
+      // so the next person to sign in on this browser starts from nothing
+      // rather than inheriting the previous session's tabs.
+      if (initializedSession.current) releaseAccountProjects()
       initializedSession.current = null
       return
     }
     if (!me) return
-    const sessionMode = `${token}:${canProjects ? "server" : "local"}`
+    // The username is part of the key: switching accounts on one token-less
+    // reload must re-init, because storage is scoped per account.
+    const sessionMode = `${token}:${me.username}:${canProjects ? "server" : "local"}`
     if (initializedSession.current === sessionMode) return
     initializedSession.current = sessionMode
     initProjectAutosave()
-    if (canProjects) void initServerProjects()
-    else void initLocalProjects()
+    if (canProjects) void initServerProjects(me.username)
+    else void initLocalProjects(me.username)
   }, [sessionReady, token, me, canProjects])
 
   if (!token) return <LoginForm />
@@ -108,7 +113,10 @@ function App() {
             Couldn&apos;t load projects from the server
             {syncError ? `: ${syncError}` : "."}
           </p>
-          <Button variant="outline" onClick={() => retryInitServerProjects()}>
+          <Button
+            variant="outline"
+            onClick={() => retryInitServerProjects(me.username)}
+          >
             Retry
           </Button>
         </div>

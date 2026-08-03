@@ -32,6 +32,8 @@ import {
   disableServerPersistence,
   enableServerPersistence,
   isServerPersistence,
+  scopedKey,
+  setAccountScope,
 } from "@/lib/persistenceMode"
 import { deserializeProject, serializeProject } from "@/lib/projectSerialize"
 import { migrateNodeData, useProjectsStore } from "@/store/projects"
@@ -76,16 +78,20 @@ interface ProjectsMeta {
 }
 
 function readMeta(): ProjectsMeta {
+  const key = scopedKey(STORAGE_KEYS.projectsMeta)
+  if (key === null) return {}
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEYS.projectsMeta) ?? "{}")
+    return JSON.parse(localStorage.getItem(key) ?? "{}")
   } catch {
     return {}
   }
 }
 
 function writeMeta(activeProjectId: string | null, nextProjectNumber: number) {
+  const key = scopedKey(STORAGE_KEYS.projectsMeta)
+  if (key === null) return
   localStorage.setItem(
-    STORAGE_KEYS.projectsMeta,
+    key,
     JSON.stringify({ activeProjectId, nextProjectNumber }),
   )
 }
@@ -93,14 +99,19 @@ function writeMeta(activeProjectId: string | null, nextProjectNumber: number) {
 // --- init / hydration --------------------------------------------------------
 
 /**
- * One-time migration source: the guest-era localStorage snapshot. Only read
- * when the server list is empty, so a wiped DB re-imports old local data
- * (acceptable for a playground) but a populated server never gets clobbered.
+ * This account's browser-local snapshot, as import candidates for a server that
+ * has none. Only read when the server list is empty, so a wiped DB re-imports
+ * old local data (acceptable for a playground) but a populated server never gets
+ * clobbered.
+ *
+ * Scoped like every other local read: a snapshot written under a *different*
+ * account is not a migration candidate. Importing browser-wide local data was
+ * how one person's projects got promoted into the next person's server account.
  */
 function readLocalProjects(): Project[] {
   return readLocalProjectState().projects.map((project) => ({
     ...project,
-    // An imported snapshot is fully acknowledged once POST succeeds; guest
+    // An imported snapshot is fully acknowledged once POST succeeds; local
     // dirty flags are device-local editing state, not server data.
     dirty: false,
   }))
@@ -112,10 +123,13 @@ interface LocalProjectState {
   nextProjectNumber: number
 }
 
-/** Read and normalize the persisted guest store without retaining live state. */
+/** Read and normalize this account's persisted store without retaining live state. */
 function readLocalProjectState(): LocalProjectState {
+  const key = scopedKey(STORAGE_KEYS.projects)
+  if (key === null)
+    return { projects: [], activeProjectId: null, nextProjectNumber: 1 }
   try {
-    const raw = localStorage.getItem(STORAGE_KEYS.projects)
+    const raw = localStorage.getItem(key)
     if (!raw)
       return { projects: [], activeProjectId: null, nextProjectNumber: 1 }
     const envelope = JSON.parse(raw) as {
@@ -161,9 +175,10 @@ function inferNextProjectNumber(projects: Project[]): number {
   return max + 1
 }
 
-export async function initServerProjects(): Promise<void> {
+export async function initServerProjects(username: string): Promise<void> {
   stopServerProjects()
   const generation = syncGeneration
+  setAccountScope(username)
   enableServerPersistence()
   useProjectSyncStore.setState({ status: "loading", loadError: undefined })
   try {
@@ -267,23 +282,46 @@ export function stopServerProjects() {
   })
 }
 
-/** Rehydrate the device-local project set after leaving server mode. */
-export async function initLocalProjects(): Promise<void> {
+/**
+ * Rehydrate one account's device-local project set after leaving server mode.
+ *
+ * Every canvas role now holds the project capabilities, so this is a fallback
+ * rather than the guest path it used to be — but the scoping matters more here
+ * than anywhere: this is the only mode that still writes to the browser.
+ */
+export async function initLocalProjects(username: string): Promise<void> {
   stopServerProjects()
-  // Only open the localStorage write gate once the local snapshot is ready to
-  // replace live state. During the logged-out gap, the old operator graph may
-  // still receive an async update and must never leak into guest storage.
+  // Bind the drawer, then open the write gate — in that order, so nothing can
+  // be written before it is known whose drawer it belongs in.
+  setAccountScope(username)
   disableServerPersistence()
   const local = readLocalProjectState()
   // Replace the project slice even when local storage is empty. Merging a
-  // missing snapshot would otherwise leave the previous operator's server
-  // projects visible to the next guest in the same browser tab.
+  // missing snapshot would otherwise leave the previous account's projects
+  // visible to the next person in the same browser tab.
   useProjectsStore.setState(local)
   useProjectsStore.getState().restoreProjects()
 }
 
-export function retryInitServerProjects() {
-  void initServerProjects()
+/**
+ * Detach browser-local storage from any account, and drop whatever the previous
+ * session left in the store. Called on sign-out: the store lives in module
+ * memory, so without this the next account's pre-hydration render would show the
+ * previous one's tabs.
+ */
+export function releaseAccountProjects() {
+  stopServerProjects()
+  disableServerPersistence()
+  setAccountScope(null)
+  useProjectsStore.setState({
+    projects: [],
+    activeProjectId: null,
+    nextProjectNumber: 1,
+  })
+}
+
+export function retryInitServerProjects(username: string) {
+  void initServerProjects(username)
 }
 
 // --- change detection ---------------------------------------------------------
