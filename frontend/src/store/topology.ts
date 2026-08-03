@@ -762,21 +762,43 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
 
       if (node.data.jobId) {
         attachJobSocket(node.id, node.data.jobId, token, patch)
-      } else {
-        // No job to resume — a plan-driven op mid-flight, or a reload before
-        // one enqueued. Revert to staged if a matching op survived the
-        // reload (retryable via Deploy), else draft.
-        const hasStagedOp = !!findStagedOp(
-          useStagingStore.getState().ops,
-          OP_KIND.createVm,
-          node.id,
-        )
+        continue
+      }
+
+      // A plan-driven node carries no per-node `jobId` — the plan job owns it.
+      // `loadOps` resumes that socket before this runs, and its whole-state
+      // snapshot re-decides every node's lifecycle from scratch, so unwinding
+      // here would only fight it. Worse, a `done` createVm op is no longer
+      // "outstanding", so the guess below lands on `draft` — reading a booted,
+      // still-provisioning machine as one that was never deployed at all. If
+      // the socket truly can't be resumed, `revertNonTerminalToStaged` unwinds.
+      if (useStagingStore.getState().deployJobId) continue
+
+      // No job of any kind to resume: a reload between the Deploy click and its
+      // 202. Revert to staged if a matching op survived the reload (retryable
+      // via Deploy), else draft — except for a node whose VM is real, which is
+      // what a recorded `vmName` means. Calling that a draft denies the machine
+      // exists; `failed` keeps the identity, and with it the teardown route out.
+      const hasStagedOp = !!findStagedOp(
+        useStagingStore.getState().ops,
+        OP_KIND.createVm,
+        node.id,
+      )
+      if (node.data.vmName) {
         patch({
-          lifecycle: hasStagedOp ? LIFECYCLE.staged : LIFECYCLE.draft,
+          lifecycle: LIFECYCLE.failed,
           progress: undefined,
           phase: undefined,
+          errorDetail:
+            "Interrupted before this machine's deployment was confirmed.",
         })
+        continue
       }
+      patch({
+        lifecycle: hasStagedOp ? LIFECYCLE.staged : LIFECYCLE.draft,
+        progress: undefined,
+        phase: undefined,
+      })
     }
   },
 
