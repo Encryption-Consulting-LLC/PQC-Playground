@@ -188,6 +188,15 @@ def test_no_windows_role_change_is_left_on_the_default_timeout():
     assert {"ocsp.remove", "iis.remove_certenroll", "ca.uninstall"} <= checked
 
 
+def test_a_feature_install_is_sized_for_its_observed_worst_case():
+    """`iis-web` legitimately ran 23.5m and `ocsp-install` 20.5m on a host that
+    varies 2.8x with load — a 30-minute cap left too little headroom, and a
+    dispatch timeout is precisely the failure retries cannot rescue."""
+    by_id = {step.id: step for step in _all_role_change_steps()}
+    for step_id in ("iis-web", "iis-share", "ocsp-install"):
+        assert by_id[step_id].timeout_s == 2700, step_id
+
+
 def test_no_windows_role_change_is_left_without_a_recovery_path():
     """The companion invariant to the timeout one: a role change must be able to
     survive one failure, either by retrying or by rebooting first. A guest-side

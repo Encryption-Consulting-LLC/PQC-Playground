@@ -75,8 +75,15 @@ _OCSP_RETRY = (10, 20, 40, 60, 90)
 # second Install-WindowsFeature against the first. That rule lives in the engine
 # (it reads the adapter's ``timed_out`` marker), so a role-change step may still
 # carry ``retry_delays_s`` for the guest-side failures a retry does fix.
+#
+# The long tier is sized off the *observed* maxima, not the averages: the same
+# `iis.setup_certenroll` ran 23.5m under deploy contention against 8.5m on an
+# idle lab, so a 30-minute cap left six minutes of headroom on a box that
+# varies 2.8x with load. A dispatch timeout is also the one failure a retry
+# schedule deliberately cannot rescue, so headroom here is worth more than
+# elsewhere.
 _CA_INSTALL_S = 2700
-_ROLE_CHANGE_S = 1800
+_ROLE_CHANGE_S = 2700
 _SERVICE_OP_S = 900
 _REBOOT_S = 1200
 
