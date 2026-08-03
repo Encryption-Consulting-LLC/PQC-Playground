@@ -52,7 +52,7 @@ from app.core.authz import (
 from app.core.db import vm_registry_col
 from app.core.jobs import transport
 from app.core.jobs.models import DoneMsg, ErrorMsg, JobStatus, ProgressMsg, QueuedMsg
-from app.routers.ws import send_json_or_disconnect
+from app.routers.ws import reject, send_json_or_disconnect
 
 router = APIRouter(prefix="/executor", tags=["executor"])
 logger = logging.getLogger(__name__)
@@ -224,7 +224,8 @@ async def connect(websocket: WebSocket) -> None:
 
     vm_id/token come from the ``X-Executor-Vm-Id``/``X-Executor-Token``
     headers (the agent's path) or ``?vm_id=&token=`` (manual/dev). Auth is
-    validated before ``accept()`` (4401 on failure). Provisioning is no longer
+    validated before any agent state is touched; a failure is rejected with 4401
+    via ``ws.reject`` so the code survives. Provisioning is no longer
     kicked off here — the Celery plan runner drives every command through the
     ``agent-dispatch`` bridge.
     """
@@ -235,7 +236,7 @@ async def connect(websocket: WebSocket) -> None:
         "token"
     )
     if not await _authenticate(vm_id, token):
-        await websocket.close(code=4401)
+        await reject(websocket, 4401)
         return
 
     await websocket.accept()
@@ -384,7 +385,7 @@ async def watch_agents(websocket: WebSocket, token: str | None = None) -> None:
     """
     user = await resolve_user_token(token)
     if user is None or Capability.VM_LIST not in ROLE_CAPABILITIES[user.role]:
-        await websocket.close(code=4401)
+        await reject(websocket, 4401)
         return
     await websocket.accept()
 
