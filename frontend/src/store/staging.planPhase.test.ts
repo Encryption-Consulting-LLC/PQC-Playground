@@ -11,23 +11,29 @@ import type { StagedOp } from "@/lib/staging"
 import type { JobSocketHandlers } from "@/lib/ws"
 
 const storage = new Map<string, string>()
-
-vi.stubGlobal("localStorage", {
+const localStorageStub = {
   getItem: (key: string) => storage.get(key) ?? null,
   setItem: (key: string, value: string) => storage.set(key, value),
   removeItem: (key: string) => storage.delete(key),
-})
+}
+
+vi.stubGlobal("localStorage", localStorageStub)
 vi.stubGlobal("window", {
+  // The auth store persists through zustand's `persist`, which reads
+  // `window.localStorage` rather than the bare global.
+  localStorage: localStorageStub,
   addEventListener: vi.fn(),
   removeEventListener: vi.fn(),
 })
 
 const deployPlanMock = vi.fn()
+const getDeployRunMock = vi.fn()
 vi.mock("@/lib/api", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/api")>()
   return {
     ...actual,
     deployPlan: (...args: unknown[]) => deployPlanMock(...args),
+    getDeployRun: (...args: unknown[]) => getDeployRunMock(...args),
   }
 })
 
@@ -56,6 +62,7 @@ vi.mock("@/lib/ws", () => ({
 let staging: typeof import("@/store/staging")
 let lib: typeof import("@/lib/staging")
 let api: typeof import("@/lib/api")
+let useAuthStore: typeof import("@/store/auth")["useAuthStore"]
 let useTopologyStore: typeof import("@/store/topology")["useTopologyStore"]
 let LIFECYCLE: typeof import("@/constants/topology")["LIFECYCLE"]
 
@@ -63,6 +70,7 @@ beforeAll(async () => {
   staging = await import("@/store/staging")
   lib = await import("@/lib/staging")
   api = await import("@/lib/api")
+  useAuthStore = (await import("@/store/auth")).useAuthStore
   useTopologyStore = (await import("@/store/topology")).useTopologyStore
   LIFECYCLE = (await import("@/constants/topology")).LIFECYCLE
 })
@@ -115,6 +123,8 @@ function state() {
 beforeEach(() => {
   handlers = null
   deployPlanMock.mockReset()
+  getDeployRunMock.mockReset()
+  getDeployRunMock.mockRejectedValue(new Error("not stubbed"))
   saveActiveProjectNowMock.mockReset()
   saveActiveProjectNowMock.mockResolvedValue(true)
   seed()
@@ -303,4 +313,108 @@ test("a lost stream still reverts a node with no VM to staged", async () => {
 
   expect(node().lifecycle).toBe(LIFECYCLE.staged)
   expect(node().errorDetail).toBeUndefined()
+})
+
+/**
+ * Reload-resume: `loadOps` deliberately clears every client-only deploy field,
+ * so the run's start time, preflight receipt, and compiled manifest have to come
+ * back off the server or the panel silently loses its clock, its receipt, and
+ * its step trees for the rest of the deploy.
+ */
+const RUN_FACTS = {
+  jobId: "job9",
+  createdAt: 1_785_781_000_000,
+  preflight: {
+    ready: true,
+    checkedAt: 1_785_781_000_000,
+    checks: [{ key: "vmNames", ok: true, detail: "No collisions." }],
+  },
+  groups: [
+    {
+      id: "op-dc",
+      kind: "createVm",
+      label: "Clone VM",
+      target: "node-dc",
+      dependsOn: [],
+      sourceBase: "ws-2025-base",
+      steps: [
+        {
+          id: "prepare",
+          label: "Prepare guest IP and first-boot media",
+          kind: "backend" as const,
+          targetNodeId: "node-dc",
+          dependsOn: [],
+        },
+      ],
+    },
+    {
+      id: "op-dc::provision",
+      kind: "provision",
+      label: "Provision dc01 — AD DS forest",
+      target: "node-dc",
+      dependsOn: ["op-dc"],
+      steps: [
+        {
+          id: "agent-ready",
+          label: "Wait for executor agent",
+          kind: "wait" as const,
+          targetNodeId: "node-dc",
+          dependsOn: [],
+        },
+      ],
+    },
+  ],
+}
+
+test("resuming a plan job restores the run's clock, receipt, and step trees", async () => {
+  useAuthStore.setState({ token: "live-token" })
+  getDeployRunMock.mockResolvedValue(RUN_FACTS)
+
+  staging.useStagingStore.getState().loadOps([createVmOp()], "job9")
+
+  // The socket is attached synchronously; only the run facts are awaited.
+  expect(state().deploying).toBe(true)
+  await vi.waitFor(() =>
+    expect(state().deployStartedAt).toBe(1_785_781_000_000),
+  )
+  expect(getDeployRunMock).toHaveBeenCalledWith("job9")
+  expect(state().preflightReceipt?.checks[0]?.detail).toBe("No collisions.")
+  // The manifest lands on the rows, so an expanded op still shows its steps and
+  // the read-only provision row is back.
+  expect(state().ops[0].executionGroup?.label).toBe("Clone VM")
+  expect(state().ops[1].id).toBe("op-dc::provision")
+  expect(state().ops[1].synthesized).toBe(true)
+})
+
+test("run facts arriving after a project switch are dropped", async () => {
+  useAuthStore.setState({ token: "live-token" })
+  let release: (value: unknown) => void = () => {}
+  getDeployRunMock.mockReturnValue(
+    new Promise((resolve) => {
+      release = resolve
+    }),
+  )
+
+  staging.useStagingStore.getState().loadOps([createVmOp()], "job9")
+  // The user switches projects while the request is still out.
+  staging.useStagingStore.getState().loadOps([], null)
+  release(RUN_FACTS)
+  await Promise.resolve()
+
+  expect(state().deployStartedAt).toBeNull()
+  expect(state().preflightReceipt).toBeNull()
+  expect(state().ops).toEqual([])
+})
+
+test("a resumed job whose run facts can't be fetched still streams", async () => {
+  useAuthStore.setState({ token: "live-token" })
+  getDeployRunMock.mockRejectedValue(new api.ApiError(404, "gone", "gone"))
+
+  staging.useStagingStore.getState().loadOps([createVmOp()], "job9")
+  await vi.waitFor(() => expect(getDeployRunMock).toHaveBeenCalled())
+
+  // Best-effort: the socket is what makes the resume work, and it is attached.
+  expect(state().deploying).toBe(true)
+  expect(handlers).not.toBeNull()
+  expect(state().deployStartedAt).toBeNull()
 })

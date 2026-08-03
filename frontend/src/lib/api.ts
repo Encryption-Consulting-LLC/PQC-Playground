@@ -599,6 +599,24 @@ export const deployPlan = (
     }),
   })
 
+/**
+ * A running plan's presentation facts, for a client that wasn't the one that
+ * clicked Deploy (a reload, another tab). The WebSocket carries live op state;
+ * these three are only on the run document, and reconstructing them client-side
+ * is impossible: `createdAt` predates this page load, `preflight` was a one-time
+ * response body, and the manifest can't be recompiled from a topology whose
+ * resources are already realized.
+ */
+export interface DeployRun {
+  jobId: string
+  createdAt: number | null
+  preflight: DeployPreflightReceipt | null
+  groups: CompiledExecutionGroup[]
+}
+
+export const getDeployRun = (jobId: string) =>
+  request<DeployRun>(URLS.deploy.run(jobId))
+
 export interface DownloadedEvidence {
   blob: Blob
   digest: string | null

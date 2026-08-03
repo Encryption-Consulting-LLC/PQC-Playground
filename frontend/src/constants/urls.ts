@@ -34,6 +34,7 @@ export const URLS = {
   deploy: {
     root: "/deploy",
     compile: "/deploy/compile",
+    run: (id: string) => `/deploy/${encodeURIComponent(id)}`,
     evidence: (id: string) => `/deploy/${encodeURIComponent(id)}/evidence`,
   },
   settings: {

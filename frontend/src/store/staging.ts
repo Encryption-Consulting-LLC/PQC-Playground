@@ -29,6 +29,7 @@ import {
   type CompiledExecutionGroup,
   deployPlan,
   type DeployPreflightReceipt,
+  getDeployRun,
   type PlanOpPayload,
 } from "@/lib/api"
 import {
@@ -155,9 +156,9 @@ interface StagingState {
   planPhase: PlanPhase | null
   /** Worker setup breadcrumb (`planSetup` progress frames) shown verbatim during `preparing`. */
   planPhaseDetail: string | null
-  /** Epoch ms of the Deploy click, for the elapsed-time escalation in the panel. Null on resumed jobs. */
+  /** Epoch ms the run started, for the elapsed-time escalation in the panel — the Deploy click locally, the run document's `createdAt` on a resumed job (`rehydrateRunFacts`). */
   deployStartedAt: number | null
-  /** What the last deploy attempt verified (202) or tripped over (409) — rendered as the receipt checklist. Survives the plan so the wait it explains reads as deliberate. */
+  /** What the last deploy attempt verified (202) or tripped over (409) — rendered as the receipt checklist. Survives both the plan and a reload, so the wait it explains reads as deliberate. */
   preflightReceipt: DeployPreflightReceipt | null
 
   stageOp: (input: StageOpInput) => StagedOp
@@ -172,7 +173,7 @@ interface StagingState {
   loadOps: (ops: StagedOp[], deployJobId: string | null) => void
   /** Sends the current ops to the backend plan runner and attaches the plan-progress socket. */
   deploy: () => void
-  /** Re-attaches to an in-flight plan job's WebSocket after a reload/project switch. */
+  /** Re-attaches to an in-flight plan job's WebSocket after a reload/project switch, and refetches the run facts the socket doesn't carry. */
   resumePlanJob: () => void
 }
 
@@ -815,6 +816,38 @@ function attachPlanSocket(
   })
 }
 
+/**
+ * Restores the three things a resumed plan can't reconstruct locally: when the
+ * run started (the elapsed clock), what preflight verified (the receipt), and
+ * the compiled manifest behind every row's label and expandable step tree.
+ *
+ * All three used to live only in the tab that clicked Deploy, so a reload showed
+ * the same plan with no clock, no receipt, and — for any row whose group the
+ * panel's own compile-preview had supplied rather than `cacheExecutionGroups` —
+ * no steps. The preview can't fill the gap on a remount either: its effect
+ * deliberately doesn't compile while a deploy is in flight.
+ *
+ * Best-effort by design. The socket is what makes a resumed deploy work; this
+ * only makes it legible, so a failure here stays silent rather than toasting
+ * over a deploy that is streaming fine.
+ */
+function rehydrateRunFacts(jobId: string): void {
+  getDeployRun(jobId)
+    .then((run) => {
+      // A project switch (or a finished plan) between request and response must
+      // not land another run's facts on the current one.
+      if (useStagingStore.getState().deployJobId !== jobId) return
+      useStagingStore.setState({
+        deployStartedAt: run.createdAt ?? null,
+        preflightReceipt: run.preflight ?? null,
+      })
+      if (run.groups.length > 0) {
+        useStagingStore.getState().cacheExecutionGroups(run.groups)
+      }
+    })
+    .catch(() => {})
+}
+
 export const useStagingStore = create<StagingState>()((set, get) => ({
   ops: [],
   deployJobId: null,
@@ -1053,6 +1086,7 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
     if (!token) return
     set({ deploying: true })
     attachPlanSocket(deployJobId, token)
+    rehydrateRunFacts(deployJobId)
   },
 }))
 

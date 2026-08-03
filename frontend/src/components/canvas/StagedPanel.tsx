@@ -263,8 +263,10 @@ export function StagedPanel() {
   const [nowMs, setNowMs] = useState(() => Date.now())
   const previewGeneration = useRef(0)
 
-  // The elapsed clock stays in the dedicated progress card for the full run;
-  // resumed jobs have no local start time and simply omit it.
+  // The elapsed clock stays in the dedicated progress card for the full run,
+  // including a job resumed after a reload — `resumePlanJob` refetches the run's
+  // server-side start time, so the count picks up where the old tab left off
+  // rather than restarting or vanishing.
   const ticking = deploying && deployStartedAt != null
   useEffect(() => {
     if (!ticking) return
