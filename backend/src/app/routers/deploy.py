@@ -13,6 +13,7 @@ per-VM firstboot ISO carrying a pool-allocated guest IP; op kinds without a
 real command sequence remain simulated stubs (see ``app.tasks._simulate_op``).
 """
 
+import logging
 import re
 import uuid
 import io
@@ -71,6 +72,8 @@ from app.core.topology import (
     TopologyValidationError,
     compile_plan,
 )
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/deploy", tags=["deploy"])
 
@@ -671,6 +674,64 @@ async def deploy(
     return {
         "job_id": job_id,
         "preflight": preflight.model_dump(by_alias=True) if preflight else None,
+    }
+
+
+@router.get(
+    "/{job_id}",
+    dependencies=[Depends(require_capability(Capability.DEPLOY))],
+)
+async def get_deploy_run(
+    job_id: str,
+    user: AuthedUser = Depends(get_current_user),
+) -> dict:
+    """The presentation facts a reconnecting client can't reconstruct itself.
+
+    The ``/api/ws/jobs/{job_id}`` stream carries live *op state*, but three things
+    the Staged panel renders alongside it only ever existed in the tab that
+    clicked Deploy: when the run started (for the elapsed clock), what preflight
+    verified (the receipt), and the compiled execution manifest (the labels and
+    expandable step trees). All three are already persisted on the run document,
+    so a reload rehydrates from here rather than from client memory.
+
+    ``groups`` is recompiled from the stored topology/operations exactly the way
+    ``run_plan_operation_task`` recompiles them, so the step ids line up with the
+    ones the worker publishes.
+    """
+
+    run = await plan_runs_col().find_one({"jobId": job_id})
+    if run is None:
+        raise HTTPException(404, detail=f"Deployment job '{job_id}' was not found.")
+    if user.role is not Role.OPERATOR and run.get("owner") != user.username:
+        raise HTTPException(403, detail="This deployment belongs to another user.")
+
+    groups: list[dict] = []
+    topology_doc = run.get("topology")
+    operations = run.get("operations")
+    if topology_doc and operations:
+        from app.core.execution_manifest import build_execution_groups
+
+        try:
+            settings_doc = await settings_col().find_one({"_id": SETTINGS_DOC_ID})
+        except RuntimeError:
+            settings_doc = None
+        try:
+            topology = TopologyDocument(**topology_doc)
+            compiled = compile_plan(
+                topology, [PlanOp(**op) for op in operations]
+            ).operations
+            groups = build_execution_groups(topology, compiled, settings_doc)
+        except Exception:  # noqa: BLE001 — a manifest is a nicety, the run is not
+            # An older run document may predate a schema change, and a manifest
+            # that can't be rebuilt must not cost the client its timer and
+            # receipt too. The panel already degrades to uncompiled op labels.
+            logger.exception("unable to rebuild the execution manifest for %s", job_id)
+
+    return {
+        "jobId": job_id,
+        "createdAt": run.get("createdAt"),
+        "preflight": run.get("preflight"),
+        "groups": groups,
     }
 
 
