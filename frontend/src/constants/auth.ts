@@ -31,7 +31,9 @@ export const CAPABILITIES = {
   isoAuthor: "iso:author", // operator-only — authored/uploaded config ISOs
   vmExecArbitrary: "vm:exec-arbitrary", // reserved — future executor phase
   deploy: "deploy",
-  projectRead: "project:read", // operator-only — gates server-side project persistence
+  // Held by every canvas role; the backend scopes each project to its owner,
+  // so these gate whether an account has saved projects, never whose.
+  projectRead: "project:read",
   projectWrite: "project:write",
 } as const
 

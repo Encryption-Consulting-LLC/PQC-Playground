@@ -144,9 +144,12 @@ async def _slug_owners() -> dict[str, list[str]]:
 
 
 async def _project_names(docs: list[dict]) -> dict[str, str]:
-    """Names for the projects persisted in Mongo. Guest project names live in
-    the browser, so a guest environment legitimately resolves to nothing here
-    and falls back to its project code."""
+    """Names for the projects persisted in Mongo, across every owner.
+
+    Deliberately unscoped, like the rest of this admin console: naming the lab
+    an abandoned VM came from is the point. A project that was deleted (or
+    predates ownership) resolves to nothing and falls back to its project code.
+    """
     ids = sorted({doc["projectId"] for doc in docs if doc.get("projectId")})
     if not ids:
         return {}

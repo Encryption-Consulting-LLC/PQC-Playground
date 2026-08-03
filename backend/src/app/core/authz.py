@@ -97,10 +97,15 @@ class Capability(str, Enum):
 #   VM_PROVISION is guest-eligible for the same reason: a guest
 #     provisioning its *own* throwaway CA/DC is the point; the executor
 #     command route enforces per-VM ownership so it can't target another VM.
-#   PROJECT_* (Mongo project persistence) is operator-only: guests keep
-#     client-side (localStorage) persistence, so the shared guest deploy never
-#     exposes a cross-visitor project list. Explicit opaque-id snapshots are
-#     handled separately by the guest-only /project-shares API.
+#   PROJECT_* (Mongo project persistence) is held by every canvas role,
+#     including guests. It grants no cross-account reach: ``routers/projects.py``
+#     filters every read and write by ``owner``, so the capability decides
+#     *whether* you have saved projects and the filter decides *which* — that is
+#     the entire limit on a guest's project access. Guests were localStorage-only
+#     before, which sounded safer but wasn't: one browser-wide storage key leaked
+#     each guest's projects to the next visitor, and a guest could deploy from a
+#     project the server had never heard of. Explicit opaque-id snapshots remain a
+#     separate surface (the guest-only /project-shares API).
 #   SETTINGS_* / REGISTRY_* / USER_ADMIN are admin-only: the shared ESXi
 #     target, base-image profiles, and account provisioning are platform
 #     concerns, not something an operator building a topology touches.
@@ -145,6 +150,8 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.VM_DELETE,
         Capability.VM_PROVISION,
         Capability.DEPLOY,
+        Capability.PROJECT_READ,
+        Capability.PROJECT_WRITE,
     },
 }
 

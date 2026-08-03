@@ -197,3 +197,15 @@ def test_a_legacy_ownerless_project_belongs_to_nobody(collection) -> None:
     assert asyncio.run(projects.list_projects(_user("alice")))["projects"] == []
     with pytest.raises(HTTPException):
         asyncio.run(projects.get_project(ALICE_PROJECT, _user("alice")))
+
+
+def test_a_guest_can_persist_projects_and_only_its_own() -> None:
+    """Guests hold the project capabilities; the owner filter is the only limit.
+
+    Asserted against ROLE_CAPABILITIES rather than a route, because the grant
+    is only safe *because* every route above is scoped — the two belong together.
+    """
+    from app.core.authz import Capability, ROLE_CAPABILITIES
+
+    assert Capability.PROJECT_READ in ROLE_CAPABILITIES[Role.GUEST]
+    assert Capability.PROJECT_WRITE in ROLE_CAPABILITIES[Role.GUEST]
