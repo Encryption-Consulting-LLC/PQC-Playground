@@ -14,6 +14,7 @@ os.environ.setdefault(
 )
 
 from app.core import agentbus
+from app.core.execution_manifest import visible_step_ids
 from app.core.sequences.model import NodeContext, RunContext, Step
 from app.core.sequences.worker import _persist_step, load_step_medians, run_op_sequence
 from app.tasks import _fmt_duration, _sequence_progress, _step_median_seconds
@@ -300,14 +301,14 @@ def test_step_median_seconds_maps_step_ids_and_converts_units():
 # --------------------------------------------------------------------------- #
 # _sequence_progress: elapsed heartbeat + estimate math                       #
 # --------------------------------------------------------------------------- #
-def _progress(medians=None, total=3):
+def _progress(medians=None, order=("install-forest", "reboot", "dns-self")):
     state = {}
     pushes = []
 
     def push():
         pushes.append(state["op-1"])
 
-    cbs = _sequence_progress("op-1", total, state, push, medians=medians)
+    cbs = _sequence_progress("op-1", list(order), state, push, medians=medians)
     return cbs, pushes
 
 
@@ -339,7 +340,9 @@ def test_tick_with_a_median_estimates_percent():
 
 
 def test_estimate_is_capped_below_completion():
-    (_, _, on_step_tick), pushes = _progress(medians={"install-forest": 100.0}, total=1)
+    (_, _, on_step_tick), pushes = _progress(
+        medians={"install-forest": 100.0}, order=("install-forest",)
+    )
     on_step_tick("install-forest", 900.0)  # 9x the median
     last = pushes[-1]
     assert "~95%" in last.phase
@@ -347,12 +350,86 @@ def test_estimate_is_capped_below_completion():
 
 
 def test_first_ever_run_of_a_command_gets_elapsed_only():
-    (_, _, on_step_tick), pushes = _progress(medians={}, total=1)
+    (_, _, on_step_tick), pushes = _progress(medians={}, order=("install-forest",))
     on_step_tick("install-forest", 75.0)
     last = pushes[-1]
     assert "1m 15s" in last.phase
     assert "~" not in last.phase and "est." not in last.phase
     assert last.percent == 0.0
+
+
+# --------------------------------------------------------------------------- #
+# _sequence_progress: the ordinal names the row the panel is showing           #
+# --------------------------------------------------------------------------- #
+def test_the_ordinal_counts_the_rows_the_panel_renders():
+    """The screenshot bug: a verify probe is a manifest *row* but not a ``Step``,
+    so counting the step list reported ``Step 3/5`` above a 6-row list, and every
+    row after the first verify was described by the wrong number."""
+    steps = [
+        Step(id="dns-set", command="dns.set_client", target="primary"),
+        Step(id="domain-join", command="domain.join", target="primary"),
+        Step(
+            id="reboot",
+            command="system.reboot",
+            target="primary",
+            verify=Step(id="domain-verify", command="domain.verify", target="primary"),
+        ),
+        Step(id="dns-apply", command="dns.apply_resources", target="primary"),
+        Step(id="dns-verify", command="dns.verify", target="primary"),
+    ]
+    order = visible_step_ids(steps)
+    assert order == [
+        "dns-set",
+        "domain-join",
+        "reboot",
+        "reboot.verify",
+        "dns-apply",
+        "dns-verify",
+    ]
+
+    callbacks, pushes = _progress(order=order)
+    callbacks.start("reboot")
+    assert pushes[-1].phase == "Step 3/6 · reboot"
+    callbacks.verify_start("reboot.verify")
+    assert pushes[-1].phase == "Step 4/6 · reboot.verify"
+    # The row after the probe is 5, not the 4 a step-list count would have said.
+    callbacks.start("dns-apply")
+    assert pushes[-1].phase == "Step 5/6 · dns-apply"
+
+
+def test_a_finished_verify_row_counts_toward_the_op_percent():
+    """Completed rows drive the bar, so the probe row has to count — otherwise the
+    percent lags the visible green dots and jumps when the parent step lands."""
+    callbacks, pushes = _progress(order=["reboot", "reboot.verify"])
+    callbacks.verify_done("reboot.verify")
+    assert pushes[-1].percent == pytest.approx(50.0, abs=0.1)
+    callbacks.complete("reboot")
+    assert pushes[-1].percent == pytest.approx(100.0, abs=0.1)
+
+
+def test_a_provision_ops_wait_rows_lead_its_ordinals():
+    """A provision group's manifest opens with two rows the sequence doesn't
+    contain (`agent-ready`, `boot-settle`), both already `done` by the time the
+    role tail runs — so its first real step is row 3, not row 1."""
+    steps = [
+        Step(id="settle-reboot", command="system.reboot", target="primary"),
+        Step(id="install-forest", command="dc.install_forest", target="primary"),
+    ]
+    callbacks, pushes = _progress(
+        order=["agent-ready", "boot-settle", *visible_step_ids(steps)]
+    )
+    callbacks.complete("agent-ready")
+    callbacks.complete("boot-settle")
+    callbacks.start("settle-reboot")
+    assert pushes[-1].phase == "Step 3/4 · settle-reboot"
+    assert pushes[-1].percent == pytest.approx(50.0, abs=0.1)
+
+
+def test_a_row_the_manifest_does_not_know_never_raises():
+    """A mislabelled step must not fail the deployment it is describing."""
+    callbacks, pushes = _progress(order=["dns-set", "domain-join"])
+    callbacks.start("mystery-step")
+    assert pushes[-1].phase == "Step 2/2 · mystery-step"
 
 
 def test_fmt_duration():

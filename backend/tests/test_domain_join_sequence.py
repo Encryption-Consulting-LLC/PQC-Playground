@@ -9,6 +9,7 @@ os.environ.setdefault(
     "SETTINGS_ENC_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 )
 
+from app.core.execution_manifest import _manifest_steps, visible_step_ids  # noqa: E402
 from app.core.sequences.definitions import op_sequence  # noqa: E402
 from app.core.sequences.model import DnsRecordContext, NodeContext, RunContext  # noqa: E402
 
@@ -138,3 +139,19 @@ def test_web_server_target_gets_the_certenroll_share_half():
 def test_non_web_target_has_no_iis_step():
     steps = op_sequence("domainJoin", _ctx(primary_template="certificateAuthority"))
     assert all(s.command != "iis.setup_certenroll" for s in steps)
+
+
+def test_the_row_list_matches_the_manifest_the_panel_renders():
+    """The two screenshots' exact numbers. `Step n/total` is counted over these
+    rows, and the panel lists them, so a drift between `visible_step_ids` and
+    `_manifest_steps` is what made `Step 3/5` sit above a 6-row list."""
+    for template, expected in (
+        ("certificateAuthority", 6),
+        ("webServer", 7),
+    ):
+        ctx = _ctx(primary_template=template, with_dns=True)
+        steps = op_sequence("domainJoin", ctx)
+        rows = visible_step_ids(steps)
+        assert len(rows) == expected, template
+        # One shared ordering: the manifest rows are exactly these ids, in order.
+        assert [item["id"] for item in _manifest_steps(steps, ctx.nodes)] == rows

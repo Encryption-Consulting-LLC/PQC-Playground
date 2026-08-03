@@ -140,37 +140,53 @@ def _step_kind(step: Step, *, verify: bool = False) -> str:
     return "agent"
 
 
+def visible_step_ids(steps: list[Step]) -> list[str]:
+    """The manifest row ids a step list expands to, in display order.
+
+    A verify probe is not a :class:`Step` of its own but *is* a row of its own
+    (``{step.id}.verify``), which is why ``len(steps)`` is not the number of rows
+    the panel shows. The runtime counted its ``Step n/total`` over the step list
+    while the panel numbered rows, so the two disagreed the moment a verify row
+    went by: srv01's domain join reported ``Step 1/6`` above a 7-row list. This is
+    the one ordering both sides read, so they can't drift again.
+    """
+    rows: list[str] = []
+    for step in steps:
+        rows.append(step.id)
+        if step.verify is not None:
+            rows.append(f"{step.id}.verify")
+    return rows
+
+
 def _manifest_steps(
     steps: list[Step], aliases: dict[str, NodeContext]
 ) -> list[dict[str, Any]]:
+    by_id: dict[str, dict[str, Any]] = {}
+    for step in steps:
+        by_id[step.id] = {
+            "label": _label(step.command),
+            "command": step.command,
+            "kind": _step_kind(step),
+            "targetNodeId": aliases[step.target].node_id,
+        }
+        if step.verify is not None:
+            by_id[f"{step.id}.verify"] = {
+                "label": _label(step.verify.command),
+                "command": step.verify.command,
+                "kind": _step_kind(step.verify, verify=True),
+                "targetNodeId": aliases[step.verify.target].node_id,
+            }
     result: list[dict[str, Any]] = []
     previous: str | None = None
-    for step in steps:
-        item_id = step.id
+    for row_id in visible_step_ids(steps):
         result.append(
             {
-                "id": item_id,
-                "label": _label(step.command),
-                "command": step.command,
-                "kind": _step_kind(step),
-                "targetNodeId": aliases[step.target].node_id,
+                "id": row_id,
+                **by_id[row_id],
                 "dependsOn": [previous] if previous else [],
             }
         )
-        previous = item_id
-        if step.verify is not None:
-            verify_id = f"{step.id}.verify"
-            result.append(
-                {
-                    "id": verify_id,
-                    "label": _label(step.verify.command),
-                    "command": step.verify.command,
-                    "kind": _step_kind(step.verify, verify=True),
-                    "targetNodeId": aliases[step.verify.target].node_id,
-                    "dependsOn": [item_id],
-                }
-            )
-            previous = verify_id
+        previous = row_id
     return result
 
 

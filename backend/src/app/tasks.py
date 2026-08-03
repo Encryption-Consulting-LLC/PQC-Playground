@@ -633,6 +633,7 @@ def _run_provision_op(
     plan has a live agent. A provisioning failure fails the op (dependents
     cancel) but leaves the booted VM registered and teardownable."""
     from app.core import agentbus
+    from app.core.execution_manifest import visible_step_ids
     from app.core.firstboot import hostname_for
     from app.core.sequences import (
         NodeContext,
@@ -833,7 +834,9 @@ def _run_provision_op(
             )
             callbacks = _sequence_progress(
                 op.id,
-                len(steps),
+                # The two rows already pushed above lead a provision op's
+                # manifest group, so they lead its ordinals too.
+                ["agent-ready", "boot-settle", *visible_step_ids(steps)],
                 state,
                 push,
                 result=partial,
@@ -1288,13 +1291,13 @@ class _SequenceCallbacks:
 
 def _sequence_progress(
     op_id: str,
-    total: int,
+    order: list[str],
     state: dict[str, OpRunState],
     push,
     result: dict | None = None,
     medians: dict[str, float] | None = None,
 ):
-    """Progress callbacks for one op's step sequence: a completed-step counter
+    """Progress callbacks for one op's step sequence: a step ordinal
     (``Step n/total``), the agent's own intra-step relay
     (``Step n/total · step-id: phase``, percent scaled into the step's slice),
     and an elapsed-time heartbeat for steps whose command goes silent for
@@ -1302,8 +1305,18 @@ def _sequence_progress(
     to ~10s, with a duration-estimated percent when ``medians`` (step_id →
     seconds, from ``step_metrics``) knows this command. ``result`` (if given)
     rides along on every running push so the frontend keeps partial facts —
-    e.g. the agent's vm_id — before the op finishes."""
-    done_count = {"n": 0}
+    e.g. the agent's vm_id — before the op finishes.
+
+    ``order`` is the op's execution-manifest rows in display order — the same
+    list the panel renders (``execution_manifest.visible_step_ids``, plus any
+    rows the caller emits ahead of the sequence, like a provision op's
+    ``agent-ready`` / ``boot-settle``). Both the ordinal and the total come from
+    it, so ``Step n/total`` names the row the panel is highlighting. Counting the
+    step list instead is what put ``Step 1/6`` above a 7-row list: a verify probe
+    is a row but not a step.
+    """
+    positions = {row_id: index for index, row_id in enumerate(order)}
+    total = max(len(order), 1)
     agent_progress: dict[str, tuple[str | None, float | None]] = {}
     last_tick_push: dict[str, float] = {}
     medians = medians or {}
@@ -1311,6 +1324,17 @@ def _sequence_progress(
     def _steps() -> dict[str, StepRunState]:
         current = state.get(op_id)
         return dict(current.steps) if current else {}
+
+    def _ordinal(step_id: str) -> int:
+        """1-based position of ``step_id`` among the visible rows. A row the
+        manifest doesn't know reads as the last one rather than raising — a
+        mislabelled step must never fail the deployment it is describing."""
+        return positions.get(step_id, total - 1) + 1
+
+    def _done_count(steps: dict[str, StepRunState]) -> int:
+        """Rows finished, read off the state the panel renders — so it stays
+        correct across a Celery redelivery that resumes mid-sequence."""
+        return sum(1 for step in steps.values() if step.status == "done")
 
     def _push_running(
         percent: float, phase: str, steps: dict[str, StepRunState] | None = None
@@ -1324,41 +1348,39 @@ def _sequence_progress(
         )
         push()
 
+    def _overall(steps: dict[str, StepRunState], intra_percent: float = 0.0) -> float:
+        return round(100.0 * (_done_count(steps) + intra_percent / 100.0) / total, 1)
+
+    def _row_label(step_id: str) -> str:
+        return f"Step {_ordinal(step_id)}/{total} · {step_id}"
+
     def on_step_start(step_id: str) -> None:
         steps = _steps()
         steps[step_id] = StepRunState(status="running", percent=0.0)
-        _push_running(round(100.0 * done_count["n"] / total, 1), step_id, steps)
+        _push_running(_overall(steps), _row_label(step_id), steps)
 
     def on_step_complete(step_id: str) -> None:
-        done_count["n"] += 1
         steps = _steps()
         steps[step_id] = StepRunState(status="done", percent=100.0)
-        _push_running(
-            round(100.0 * done_count["n"] / total, 1),
-            f"Step {done_count['n']}/{total}",
-            steps,
-        )
+        _push_running(_overall(steps), _row_label(step_id), steps)
 
     def on_step_progress(
         step_id: str, phase: str | None, percent: float | None
     ) -> None:
         agent_progress[step_id] = (phase, percent)
-        n = done_count["n"]
-        label = f"Step {n + 1}/{total} · {step_id}"
+        label = _row_label(step_id)
         if phase:
             label += f": {phase}"
-        overall = round(100.0 * (n + (percent or 0.0) / 100.0) / total, 1)
         steps = _steps()
         steps[step_id] = StepRunState(status="running", percent=percent, phase=phase)
-        _push_running(overall, label, steps)
+        _push_running(_overall(steps, percent or 0.0), label, steps)
 
     def on_step_tick(step_id: str, elapsed_s: float) -> None:
         if elapsed_s - last_tick_push.get(step_id, 0.0) < _STEP_TICK_PUSH_GAP_S:
             return
         last_tick_push[step_id] = elapsed_s
         phase, agent_pct = agent_progress.get(step_id, (None, None))
-        n = done_count["n"]
-        label = f"Step {n + 1}/{total} · {step_id}"
+        label = _row_label(step_id)
         if phase:
             label += f": {phase}"
         label += f" — {_fmt_duration(elapsed_s)}"
@@ -1368,20 +1390,19 @@ def _sequence_progress(
             est = min(_STEP_EST_PCT_CAP, 100.0 * elapsed_s / median_s)
             pct = max(pct, est)
             label += f" (~{est:.0f}%, est. {_fmt_duration(median_s)})"
-        overall = round(100.0 * (n + pct / 100.0) / total, 1)
         steps = _steps()
         steps[step_id] = StepRunState(status="running", percent=pct, phase=label)
-        _push_running(overall, label, steps)
+        _push_running(_overall(steps, pct), label, steps)
 
     def on_verify_start(step_id: str) -> None:
         steps = _steps()
         steps[step_id] = StepRunState(status="running", percent=0.0)
-        _push_running(round(100.0 * done_count["n"] / total, 1), step_id, steps)
+        _push_running(_overall(steps), _row_label(step_id), steps)
 
     def on_verify_done(step_id: str) -> None:
         steps = _steps()
         steps[step_id] = StepRunState(status="done", percent=100.0)
-        _push_running(round(100.0 * done_count["n"] / total, 1), step_id, steps)
+        _push_running(_overall(steps), _row_label(step_id), steps)
 
     return _SequenceCallbacks(
         on_step_complete,
@@ -1410,6 +1431,7 @@ def _run_sequence_op(
     which is also how an op whose expansion is empty for the current topology
     degrades. A resolution/sequence failure fails the op (dependents cancel).
     """
+    from app.core.execution_manifest import visible_step_ids
     from app.core.sequences import HealthGateError, SequenceCancelled, SequenceError
     from app.core.sequences.context import ContextError, build_run_context
     from app.core.sequences.definitions import op_sequence
@@ -1439,7 +1461,11 @@ def _run_sequence_op(
 
     total = len(steps)
     callbacks = _sequence_progress(
-        op.id, total, state, push, medians=_step_median_seconds(db, steps)
+        op.id,
+        visible_step_ids(steps),
+        state,
+        push,
+        medians=_step_median_seconds(db, steps),
     )
     on_step_complete, on_step_progress, on_step_tick = callbacks
 
