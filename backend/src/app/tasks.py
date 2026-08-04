@@ -46,7 +46,7 @@ from app.core.db.models import now_ms
 from app.core.db.sync import worker_db
 from app.core.errors import map_vmkit_error
 from app.core.esxi import load_target_sync
-from app.core.firstboot import AgentBundle, build_authored_iso, build_firstboot_iso
+from app.core.firstboot import AgentBundle, build_firstboot_iso
 from app.core.golden_image import (
     GoldenImageConfig,
     GoldenImagePreflight,
@@ -930,14 +930,14 @@ def _run_clone_op(
     owner: str | None = None,
     project_id: str | None = None,
 ) -> bool:
-    """Execute a ``createVm`` op for real, from one of three ISO sources:
+    """Execute a ``createVm`` op for real, from one of two ISO sources:
 
-    - default: claim a guest IP, render+pack the per-VM firstboot ISO;
-    - inline authored files: pack exactly what the operator wrote;
+    - default: claim a guest IP, render+pack the per-VM firstboot ISO — with any
+      inline authored files layered over the rendered set;
     - uploaded ISO: fetch the GridFS file and attach it verbatim.
 
-    Authored/uploaded ops deliberately claim NO pool address and render nothing
-    — the authored content is the complete disc, so their op result carries no
+    Only an *uploaded* ISO deliberately claims NO pool address and renders
+    nothing — that disc is the complete one, so such an op's result carries no
     ``ip``. Returns False on failure — a claimed IP is released so a failed op
     never strands an address."""
     from app.routers.iso import delete_uploaded_iso_sync, fetch_uploaded_iso_sync
@@ -970,7 +970,12 @@ def _run_clone_op(
         push()
         return False
     iso_id = op.params.get("isoId")
-    authored = bool(op.files) or bool(iso_id)
+    # Only an *uploaded* ISO is a complete disc the server must not touch.
+    # Authored PACK files are layered over the rendered set by
+    # ``build_firstboot_iso``, so they keep the pool IP, the agent, and a DC's
+    # password reset — otherwise hand-editing one script would silently produce
+    # a VM with no address that never phones home (and so never provisions).
+    authored = bool(iso_id)
     bundling = (
         settings.executor_bundling_enabled
         and not authored
@@ -1051,12 +1056,6 @@ def _run_clone_op(
                 iso = fetch_uploaded_iso_sync(
                     db, iso_id, Path(tmp) / f"{vm_name}-config.iso"
                 )
-            elif op.files:
-                iso = build_authored_iso(
-                    [(f.name, f.content) for f in op.files],
-                    vm_name=vm_name,
-                    dest_dir=Path(tmp),
-                )
             else:
                 # Plaintext (``extract_template_config`` never encrypts —
                 # ``encrypt_config_secrets`` does that on the way to Mongo).
@@ -1124,6 +1123,9 @@ def _run_clone_op(
                     # so the credential every later domain join authenticates
                     # with. Blank for every other template.
                     admin_password=template_config.get(DOMAIN_ADMIN_PASSWORD_KEY, ""),
+                    # Operator-authored overrides/additions (Config ISO, PACK
+                    # mode). Empty for the default path.
+                    authored_scripts=[(f.name, f.content) for f in op.files],
                 )
             req = CloneRequest(
                 name=vm_name,

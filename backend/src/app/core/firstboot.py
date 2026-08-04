@@ -37,10 +37,13 @@ The disc is not a secret store: it already ships the agent's bearer token in
 plaintext PowerShell, and vmkit leaves it attached at
 ``[datastore] <vm>/<vm>-config.iso`` for the VM's lifetime.
 
-``build_authored_iso`` packs an operator-authored script set verbatim via
-isokit's v2 API — the server injects nothing (no hostname/network render, no
-role scripts, no pool IP). ``build_firstboot_iso`` (the guest/default path)
-uses ``build_script_iso`` and its v1 manifest.
+Operator-authored scripts (the Inspector's Config ISO panel, PACK mode) are
+*layered over* this set rather than replacing it: ``authored_scripts`` lets a
+file override the server-rendered script of the same name and appends anything
+else, but the pool IP, the agent, and the DC's password reset are injected
+either way. So an operator can hand-edit ``10-hostname.ps1`` without silently
+producing a VM that never phones home. Only a pre-built **uploaded** ISO
+bypasses this module entirely — that disc is attached verbatim.
 """
 
 import re
@@ -168,6 +171,7 @@ def build_firstboot_iso(
     dest_dir: Path,
     agent: AgentBundle | None = None,
     admin_password: str = "",
+    authored_scripts: list[tuple[str, str]] | None = None,
 ) -> Path:
     """Render + pack the per-VM config ISO into ``dest_dir``; returns its path.
 
@@ -183,6 +187,14 @@ def build_firstboot_iso(
     ``50-password.ps1``, resetting the guest's built-in local ``Administrator``
     (see ``LOCAL_ADMIN_ACCOUNT``). Blank — every template but a domain
     controller — renders nothing, as does any Linux template.
+
+    ``authored_scripts`` is the operator's ``(name, content)`` set from the
+    Config ISO panel, layered over the above: a name matching one of the
+    rendered scripts *replaces* it (that render is then skipped, so the authored
+    text is what boots), and any other name is appended after the role scripts
+    in name order. The agent install step is deliberately not overridable —
+    the panel presents it as a non-removable row, so an authored file of the
+    same name is dropped rather than duplicated onto the disc.
 
     Raises ``KeyError`` on an unknown template (routes validate against
     ``TEMPLATE_IDS`` first, so hitting it here is a programming error) and
@@ -202,44 +214,75 @@ def build_firstboot_iso(
             "The Windows executor agent cannot be bundled into a Linux template."
         )
 
-    hostname_script = dest_dir / f"10-hostname.{extension}"
-    hostname_script.write_text(
-        configgen.render_hostname(platform, hostname), encoding="utf-8"
-    )
+    # Authored files land on disc first so the renders below can check whether
+    # they've already been supplied — same directory, so rendering over one
+    # would clobber the operator's text.
+    authored: dict[str, Path] = {}
+    for name, content in authored_scripts or []:
+        # Never overridable: the agent's install step is what makes the VM
+        # reachable at all, and packing two entries under one disc filename is an
+        # isokit collision. Skipped before the write so no shadow copy is left
+        # in dest_dir to confuse anyone reading the build directory.
+        if name == _AGENT_INSTALL_SCRIPT.name:
+            continue
+        path = dest_dir / name
+        path.write_text(content, encoding="utf-8")
+        authored[name] = path
 
-    network_script = dest_dir / f"20-network.{extension}"
-    network_script.write_text(
-        configgen.render_network(
-            platform,
-            NetworkConfig(
-                mode="static",
-                ip=ip,
-                prefix=net.prefix,
-                gateway=net.gateway,
-                dns1=net.dns1,
-                dns2=net.dns2,
-                dns_suffix=net.dns_suffix,
+    hostname_script = authored.pop(f"10-hostname.{extension}", None)
+    if hostname_script is None:
+        hostname_script = dest_dir / f"10-hostname.{extension}"
+        hostname_script.write_text(
+            configgen.render_hostname(platform, hostname), encoding="utf-8"
+        )
+
+    network_script = authored.pop(f"20-network.{extension}", None)
+    if network_script is None:
+        network_script = dest_dir / f"20-network.{extension}"
+        network_script.write_text(
+            configgen.render_network(
+                platform,
+                NetworkConfig(
+                    mode="static",
+                    ip=ip,
+                    prefix=net.prefix,
+                    gateway=net.gateway,
+                    dns1=net.dns1,
+                    dns2=net.dns2,
+                    dns_suffix=net.dns_suffix,
+                ),
             ),
-        ),
-        encoding="utf-8",
-    )
+            encoding="utf-8",
+        )
 
-    scripts = [hostname_script, network_script, *role_scripts_for(template)]
-
-    # A domain controller's credential bootstrap. Kept out of ``scripts`` so both
-    # ISO paths can pack it *after* the agent install step: if this throws, the
-    # runner fails fast and never reboots (so the agent service never starts
-    # either way), but the binary and its service registration are already
-    # persisted — a power-cycle then yields a connected, diagnosable VM. Running
-    # it earlier would abort before the agent was even copied.
+    # A domain controller's credential bootstrap. Kept out of ``scripts`` so it
+    # packs *after* the agent install step: if this throws, the runner fails fast
+    # and never reboots (so the agent service never starts either way), but the
+    # binary and its service registration are already persisted — a power-cycle
+    # then yields a connected, diagnosable VM. Running it earlier would abort
+    # before the agent was even copied. Popped here rather than left to
+    # ``extra_scripts`` so an authored override keeps that late position.
     password_scripts: list[Path] = []
-    if admin_password and platform == "windows":
+    password_override = authored.pop("50-password.ps1", None)
+    if password_override is not None:
+        password_scripts.append(password_override)
+    elif admin_password and platform == "windows":
         password_script = dest_dir / "50-password.ps1"
         password_script.write_text(
             configgen.render_password(platform, LOCAL_ADMIN_ACCOUNT, admin_password),
             encoding="utf-8",
         )
         password_scripts.append(password_script)
+
+    # What's left is genuinely additional. Sorted so the manifest order the
+    # numeric prefixes document is the order isokit receives.
+    extra_scripts = [authored[name] for name in sorted(authored)]
+    scripts = [
+        hostname_script,
+        network_script,
+        *role_scripts_for(template),
+        *extra_scripts,
+    ]
 
     iso_path = dest_dir / f"{vm_name}-config.iso"
 
@@ -261,29 +304,4 @@ def build_firstboot_iso(
         scripts=[*scripts, _AGENT_INSTALL_SCRIPT, *password_scripts],
         files=[binary_on_disc, config_path],
     )
-    return iso_path
-
-
-def build_authored_iso(
-    files: list[tuple[str, str]],
-    *,
-    vm_name: str,
-    dest_dir: Path,
-) -> Path:
-    """Pack operator-authored ``(name, content)`` scripts — exactly as received,
-    in the order received (the frontend sends them name-sorted, matching the
-    ``10-/20-/30-`` convention) — into ``dest_dir``; returns the ISO's path.
-
-    The authored set is the complete disc: nothing is rendered or appended
-    server-side. Names/sizes were validated in ``routers/deploy.py``; isokit
-    ``ValueError``s propagate as op-level failures.
-    """
-    script_paths: list[Path] = []
-    for name, content in files:
-        path = dest_dir / name
-        path.write_text(content, encoding="utf-8")
-        script_paths.append(path)
-
-    iso_path = dest_dir / f"{vm_name}-config.iso"
-    isokit.build_config_iso(iso_path, scripts=script_paths)
     return iso_path

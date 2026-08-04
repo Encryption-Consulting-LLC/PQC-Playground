@@ -206,10 +206,11 @@ def validate_plan(
 
     Every ``createVm`` is a real clone (any client ``simulate`` param is
     ignored — real-vs-stub is never client authority), so each one needs a
-    configured shared ESXi target up front. The guest IP range is only needed
-    on the default path: an authored op (inline ``files`` or an uploaded-ISO
-    ``isoId``) is the complete disc — the server injects nothing and claims no
-    pool address. Also rewrites each ``createVm``'s ``vmName`` in place via
+    configured shared ESXi target up front. The guest IP range is needed
+    everywhere except an uploaded-ISO op (``isoId``), which is the complete disc
+    — the server injects nothing and claims no pool address. Inline ``files``
+    still need it: they layer over the rendered set, which bakes the address.
+    Also rewrites each ``createVm``'s ``vmName`` in place via
     ``enforce_guest_vm_name`` — a guest must not be able to name a real VM
     outside its own identity's namespace; the derived guest name is
     ``guest-<user>-<project>-<machine>``, so a guest clone needs ``project_id``.
@@ -318,9 +319,10 @@ def validate_plan(
         iso_id = op.params.get("isoId")
         authored = bool(op.files) or bool(iso_id)
         if authored:
-            # The hard authored-ISO gate: authored discs run arbitrary scripts as
-            # SYSTEM and bypass the pool — DEPLOY alone (guest-eligible) must
-            # never be enough to submit one.
+            # The hard authored-ISO gate: authored content runs arbitrary scripts
+            # as SYSTEM — DEPLOY alone (guest-eligible) must never be enough to
+            # submit any of it, inline files included even though those now
+            # layer over the rendered set rather than replacing it.
             if Capability.ISO_AUTHOR not in ROLE_CAPABILITIES[user.role]:
                 raise HTTPException(
                     403,
@@ -395,9 +397,10 @@ def validate_plan(
                     f"Op '{op.id}' (createVm) needs a shared ESXi target, but none is configured"
                 ),
             )
-        # Same fail-early logic for the IP the clone's firstboot ISO bakes in —
-        # unless the op is authored, in which case no pool address is used.
-        if not authored and not guest_network_configured:
+        # Same fail-early logic for the IP the clone's firstboot ISO bakes in.
+        # Only an uploaded ISO skips the pool: it is attached verbatim, whereas
+        # inline files still ride the rendered (address-baking) firstboot set.
+        if not iso_id and not guest_network_configured:
             raise HTTPException(
                 422,
                 detail=(
