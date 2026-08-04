@@ -38,7 +38,12 @@ export function DomainRegions({
   const edges = useTopologyStore((state) => state.edges)
   const domains = nodes.filter(
     (node) =>
-      node.data.typeId === "domainController" && isConnectable(node.data),
+      node.data.typeId === "domainController" &&
+      // `isConnectable` excludes `deploying` — correct for edge validation, but
+      // it's the whole window in which the forest is being installed, so the
+      // circle would vanish for exactly the minutes it matters most. Accepted
+      // here only; the pulse below is what marks it as not-yet-real.
+      (isConnectable(node.data) || node.data.lifecycle === LIFECYCLE.deploying),
   )
 
   if (domains.length === 0) return null
@@ -81,6 +86,12 @@ export function DomainRegions({
           const pending =
             dc.data.lifecycle === LIFECYCLE.staged ||
             dc.data.lifecycle === LIFECYCLE.provisioning
+          // The forest is being built right now: clone running, or booted and
+          // working through `dc.install_forest`. Pulses until the node is
+          // deployed, then holds steady.
+          const installing =
+            dc.data.lifecycle === LIFECYCLE.deploying ||
+            dc.data.lifecycle === LIFECYCLE.provisioning
           const members = edges
             .filter(
               (edge) =>
@@ -93,14 +104,19 @@ export function DomainRegions({
           return (
             <div
               key={dc.id}
+              // One `animation` wins per element, so these stay a single
+              // ternary: a live drag preview reads over an install, which reads
+              // over the idle empty-domain breathe.
               className={
                 activePreview
                   ? activePreview.allowed
                     ? "domain-region-accepting"
                     : "domain-region-rejecting"
-                  : summary.memberCount === 0
-                    ? "domain-region-empty"
-                    : undefined
+                  : installing
+                    ? "domain-region-installing"
+                    : summary.memberCount === 0
+                      ? "domain-region-empty"
+                      : undefined
               }
               style={{
                 position: "absolute",
