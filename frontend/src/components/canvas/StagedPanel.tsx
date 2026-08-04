@@ -423,8 +423,15 @@ export function StagedPanel() {
                         className={`h-3 w-3 transition-transform ${isExpanded ? "rotate-90" : ""}`}
                       />
                     </button>
+                    {/* Number every row the panel renders, including the
+                        read-only synthesized provision rows. Skipping those
+                        while they still consumed a list position printed
+                        `1 · 3 · 5 · 7 · 9 10 11 12` — a sequence with holes in
+                        it, which reads as steps that went missing rather than
+                        as a staged/synthesized distinction. The muted title and
+                        the absent ✕ already carry that distinction. */}
                     <span className="w-4 shrink-0 text-right text-[10px] text-muted-foreground">
-                      {op.synthesized ? "·" : i + 1}
+                      {i + 1}
                     </span>
                     <Icon className="mt-0.5 h-3.5 w-3.5 shrink-0 text-muted-foreground" />
                     <span className="min-w-0 flex-1">
