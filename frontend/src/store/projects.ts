@@ -23,8 +23,9 @@ import type { Edge, Node } from "@xyflow/react"
 
 import type { Viewport } from "@xyflow/react"
 
-import { STORAGE_KEYS } from "@/constants"
+import { ROLES, STORAGE_KEYS } from "@/constants"
 import { LIFECYCLE } from "@/constants/topology"
+import { useAuthStore } from "@/store/auth"
 import type { StagedOp } from "@/lib/staging"
 import type { MachineData } from "@/store/topology"
 import { DEFAULT_VIEWPORT, useTopologyStore } from "@/store/topology"
@@ -245,7 +246,11 @@ export const useProjectsStore = create<ProjectsState>()(
         // snapshot it into the freshly-created project. Suppressed so the
         // build's per-node/edge churn doesn't autosave on every step.
         withSuppressedAutosave(() => {
-          buildPkiTemplateIntoStores(project.id)
+          buildPkiTemplateIntoStores(project.id, {
+            // Operators name their own labs; the per-project NetBIOS prefix is
+            // there to keep guests distinct in the shared pool.
+            netbiosPrefixed: useAuthStore.getState().role !== ROLES.operator,
+          })
         })
         get().saveActiveSnapshot()
       },

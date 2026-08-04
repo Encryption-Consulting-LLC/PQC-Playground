@@ -253,3 +253,23 @@ describe("supplied PKI project template", () => {
     ).toHaveLength(3)
   })
 })
+
+describe("the DC's seeded NetBIOS name", () => {
+  function seededNetbios() {
+    return useTopologyStore
+      .getState()
+      .nodes.find((node) => node.data.name === "DC01")?.data.config?.netbiosName
+  }
+
+  it("carries the per-project prefix that keeps guest labs distinct", () => {
+    buildPkiTemplateIntoStores("cc92f3-lab", { netbiosPrefixed: true })
+
+    expect(seededNetbios()).toBe("cc92f3-ENCON")
+  })
+
+  it("is left bare for an operator, who gets the full 15-char budget", () => {
+    buildPkiTemplateIntoStores("cc92f3-lab", { netbiosPrefixed: false })
+
+    expect(seededNetbios()).toBe("ENCON")
+  })
+})

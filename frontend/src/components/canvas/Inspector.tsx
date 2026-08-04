@@ -596,6 +596,10 @@ export function Inspector() {
       ? caDepth(nodeId, edges)
       : null
   const domain = domainMembership(nodeId, edges, nodes)
+  // Guests only. The prefix exists to keep NetBIOS names distinct across the
+  // projects sharing the guest pool; an operator names their own labs and gets
+  // the whole 15-char budget. Purely client-side either way — the backend
+  // validates the value it's given and never prefixes.
   const netbiosPrefix = projectNetbiosPrefix(activeProjectId)
 
   // Only an unconfigured node can be renamed: anything further along has a
@@ -893,7 +897,9 @@ export function Inspector() {
                   vmName={data.name}
                   initial={data.config}
                   fixedPrefixes={
-                    data.typeId === "domainController" && netbiosPrefix
+                    data.typeId === "domainController" &&
+                    netbiosPrefix &&
+                    !isOperator
                       ? { netbiosName: netbiosPrefix }
                       : undefined
                   }
