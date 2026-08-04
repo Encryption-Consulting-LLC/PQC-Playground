@@ -1,9 +1,10 @@
 /**
  * The one in-flight teardown job, persisted across reloads.
  *
- * `App.tsx` has no router, so a reload drops the admin back to the Accounts
- * section — without persistence, a teardown started a moment earlier would
- * simply vanish from the UI while the worker kept destroying VMs.
+ * A reload returns to the same URL now that the console is routed, but the
+ * job id is the only handle on the progress stream, and it lives nowhere else
+ * — without persistence a teardown started a moment earlier would still
+ * vanish from the UI while the worker kept destroying VMs.
  *
  * Only the job's *identity* is stored: id, when it started, a human label, and
  * the targets. Op state is deliberately never persisted, because the backend
