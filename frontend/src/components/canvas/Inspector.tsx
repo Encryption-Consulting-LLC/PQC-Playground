@@ -34,6 +34,7 @@ import {
   isPasswordValid,
   passwordRules,
 } from "@/lib/passwordPolicy"
+import { syncHostnameScript } from "@/lib/hostnameSync"
 import { projectNetbiosPrefix } from "@/lib/projectNaming"
 import { OP_KIND, OP_STATUS } from "@/lib/staging"
 import type { StagedOp } from "@/lib/staging"
@@ -595,7 +596,19 @@ export function Inspector() {
       ? caDepth(nodeId, edges)
       : null
   const domain = domainMembership(nodeId, edges, nodes)
+  // Guests only. The prefix exists to keep NetBIOS names distinct across the
+  // projects sharing the guest pool; an operator names their own labs and gets
+  // the whole 15-char budget. Purely client-side either way — the backend
+  // validates the value it's given and never prefixes.
   const netbiosPrefix = projectNetbiosPrefix(activeProjectId)
+
+  // Only an unconfigured node can be renamed: anything further along has a
+  // staged (or executed) createVm whose VM name and hostname script derive from
+  // this. `revertOp` puts the node back to `draft` when that op is removed, so
+  // the field re-opens on its own — no extra state to track.
+  const nameLocked =
+    !!data.vmName ||
+    (data.lifecycle !== LIFECYCLE.draft && data.lifecycle !== LIFECYCLE.failed)
 
   function startRename() {
     setDraftName(data.name)
@@ -606,6 +619,7 @@ export function Inspector() {
     const trimmed = draftName.trim()
     if (trimmed && trimmed !== data.name) {
       store.renameNode(nodeId, trimmed)
+      syncHostnameScript(nodeId, trimmed)
       toast.success(`Renamed to "${trimmed}"`)
     }
     setEditingName(false)
@@ -818,16 +832,20 @@ export function Inspector() {
           )}
         </section>
 
-        {/* Rename — locked once a real VM exists: the name is baked into the
-            deployed VM's inventory name (guest-<user>-<project>-<machine>), so
-            it can't change after deployment. */}
+        {/* Rename — locked from Configure onwards. The name is what the clone is
+            named after (and what the hostname script is rendered from), so once
+            a createVm op is staged it is committed; removing that op from the
+            Staged tab returns the node to `draft` and re-opens this. Past deploy
+            it's baked into the VM's inventory name (guest-<user>-<project>-<
+            machine>) and can never change. */}
         <section className="flex flex-col gap-2">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Name
           </p>
-          {data.vmName ? (
+          {nameLocked ? (
             <p className="text-xs text-muted-foreground">
-              {data.name} — locked after deploy
+              {data.name} —{" "}
+              {data.vmName ? "locked after deploy" : "locked after configure"}
             </p>
           ) : editingName ? (
             <div className="flex gap-1">
@@ -879,7 +897,9 @@ export function Inspector() {
                   vmName={data.name}
                   initial={data.config}
                   fixedPrefixes={
-                    data.typeId === "domainController" && netbiosPrefix
+                    data.typeId === "domainController" &&
+                    netbiosPrefix &&
+                    !isOperator
                       ? { netbiosName: netbiosPrefix }
                       : undefined
                   }

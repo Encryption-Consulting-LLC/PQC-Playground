@@ -57,8 +57,16 @@ const PKI = {
  * Controller, and an IIS web server publishing CDP/AIA. The CA/web are wired
  * up and the online members domain-joined. Every VM is left `staged`, so the
  * project is one Deploy away from real clones.
+ *
+ * `netbiosPrefixed` seeds the DC's NetBIOS name with the per-project prefix that
+ * keeps guest labs distinct in the shared pool. Passed in rather than read off
+ * the auth store so this stays a pure store-builder; the caller
+ * (`store/projects.ts`) knows the role.
  */
-export function buildPkiTemplateIntoStores(projectId?: string) {
+export function buildPkiTemplateIntoStores(
+  projectId?: string,
+  { netbiosPrefixed = true }: { netbiosPrefixed?: boolean } = {},
+) {
   // Fresh slate — clear any graph the previous project left in the stores.
   useStagingStore.getState().loadOps([], null)
   useTopologyStore.getState().loadSnapshot([], [], {}, DEFAULT_VIEWPORT)
@@ -109,7 +117,9 @@ export function buildPkiTemplateIntoStores(projectId?: string) {
     { x: 720, y: 420 },
     {
       domainName: PKI.domainName,
-      netbiosName: `${projectNetbiosPrefix(projectId ?? null)}${PKI.netbiosName}`,
+      netbiosName: netbiosPrefixed
+        ? `${projectNetbiosPrefix(projectId ?? null)}${PKI.netbiosName}`
+        : PKI.netbiosName,
       forestLevel: PKI.forestLevel,
       domainAdminPassword: PKI.domainAdminPassword,
     },

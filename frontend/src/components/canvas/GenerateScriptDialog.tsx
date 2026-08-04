@@ -5,6 +5,7 @@ import { toast } from "sonner"
 
 import { generateHostname, generateNetwork, generatePassword } from "@/lib/api"
 import type { Platform } from "@/lib/api"
+import { HOSTNAME_BASENAME, defaultHostname } from "@/lib/hostname"
 import type { IsoFileEntry } from "@/store/topology"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -18,24 +19,12 @@ import {
 } from "@/components/ui/select"
 
 const KINDS = {
-  hostname: { label: "Hostname", basename: "10-hostname" },
+  hostname: { label: "Hostname", basename: HOSTNAME_BASENAME },
   network: { label: "Network", basename: "20-network" },
   password: { label: "Password", basename: "25-password" },
 } as const
 
 type Kind = keyof typeof KINDS
-
-/**
- * Frontend mirror of the backend's `hostname_for` (core/firstboot.py): safe
- * charset, 15-char NetBIOS limit keeping the tail — purely a prefill
- * convenience; configgen validates the real value on generate.
- */
-function defaultHostname(nodeName: string, platform: Platform): string {
-  const safe =
-    nodeName.replace(/[^A-Za-z0-9-]/g, "-").replace(/^-+|-+$/g, "") || "vm"
-  const limit = platform === "linux" ? 63 : 15
-  return safe.slice(-limit).replace(/^-+|-+$/g, "") || "vm"
-}
 
 /**
  * "Generate from template" (sub-plan 4): a small form per configgen generator

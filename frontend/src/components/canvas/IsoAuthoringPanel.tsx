@@ -1,5 +1,14 @@
-import { useRef, useState } from "react"
-import { Disc3, FileCode2, Loader2, Plus, Upload, Wand2, X } from "lucide-react"
+import { useEffect, useRef, useState } from "react"
+import {
+  Disc3,
+  FileCode2,
+  Loader2,
+  Lock,
+  Plus,
+  Upload,
+  Wand2,
+  X,
+} from "lucide-react"
 import { toast } from "sonner"
 
 import {
@@ -11,9 +20,16 @@ import {
   ISO_UPLOAD_MAX_BYTES,
 } from "@/constants/iso"
 import type { IsoMode } from "@/constants/iso"
-import { deleteIso, getTemplateScripts, uploadIso } from "@/lib/api"
+import {
+  deleteIso,
+  generateHostname,
+  getTemplateScripts,
+  uploadIso,
+} from "@/lib/api"
 import { cn } from "@/lib/utils"
-import { templatePlatform } from "@/constants/templates"
+import { defaultHostname, hostnameScriptName } from "@/lib/hostname"
+import { seedsFirstbootScripts, templatePlatform } from "@/constants/templates"
+import { LIFECYCLE } from "@/constants/topology"
 import type { IsoAuthoring, IsoFileEntry } from "@/store/topology"
 import { useTopologyStore } from "@/store/topology"
 import { useStagingStore } from "@/store/staging"
@@ -37,6 +53,43 @@ function formatSize(bytes: number): string {
   return `${Math.max(1, Math.round(bytes / 1024))} KiB`
 }
 
+/**
+ * The rest of the real firstboot disc — the parts the *server* owns, listed so
+ * the panel mirrors `core/firstboot.py`'s `10-/20-/40-/50-` manifest instead of
+ * implying the authored files are all of it.
+ *
+ * These aren't authored files because the client cannot produce them honestly:
+ * `20-network` bakes the IP claimed from the guest pool at clone time, and the
+ * agent's install step plus its bearer token are minted per VM. The DC's
+ * password reset is listed because it has to precede `Install-ADDSForest` and so
+ * cannot be an executor step.
+ */
+function serverManagedScripts(
+  templateId: string,
+): { name: string; detail: string }[] {
+  const platform = templatePlatform(templateId)
+  const extension = platform === "linux" ? "sh" : "ps1"
+  const rows = [
+    {
+      name: `20-network.${extension}`,
+      detail: "Static address claimed from the guest IP pool at deploy",
+    },
+  ]
+  if (platform === "windows") {
+    rows.push({
+      name: "40-install-executor.ps1",
+      detail: "Phone-home agent — always installed, cannot be removed",
+    })
+  }
+  if (templateId === "domainController") {
+    rows.push({
+      name: "50-password.ps1",
+      detail: "Resets the local Administrator to this DC's domain password",
+    })
+  }
+  return rows
+}
+
 /** First `new-script.ps1` variant that doesn't collide with existing names. */
 function freshName(existing: string[], extension: ".ps1" | ".sh"): string {
   const initial = `new-script${extension}`
@@ -52,8 +105,18 @@ function freshName(existing: string[], extension: ".ps1" | ".sh"): string {
  * toggle sit two modes: PACK — a file-manager-style grid of authored firstboot
  * scripts (double-click to edit; backend packs them with isokit at deploy
  * time) — and UPLOAD-ISO — a pre-built .iso pushed to the backend now and
- * attached verbatim at deploy time. Either way the authored disc is complete:
- * the server renders nothing and the VM gets no pool IP.
+ * attached verbatim at deploy time.
+ *
+ * The two modes differ in how much of the disc they own. PACK files are
+ * *layered over* the rendered set (`build_firstboot_iso`'s `authored_scripts`):
+ * a same-named file wins, anything else is appended, and the pool IP, the agent
+ * and a DC's password reset are injected regardless — which is why those appear
+ * here as read-only server-managed rows. UPLOAD-ISO is the complete disc: the
+ * server injects nothing and the VM gets no pool IP.
+ *
+ * For a PKI component template (`seedsFirstbootScripts`) the panel opens
+ * pre-filled rather than off-and-empty, so the first thing an operator sees is
+ * the disc that will actually boot.
  *
  * All durable state lives on the node (`MachineData.isoAuthoring`) so it rides
  * project snapshots; deploy reads it fresh (`buildOpPayload`), so edits on a
@@ -70,10 +133,61 @@ export function IsoAuthoringPanel({ nodeId }: { nodeId: string }) {
   const scriptInputRef = useRef<HTMLInputElement>(null)
   const isoInputRef = useRef<HTMLInputElement>(null)
 
+  // Pre-fill a component template's disc the first time its Inspector is opened
+  // (the panel only mounts on selection, which is exactly the "placed, then
+  // clicked" moment). `seeded` is written up front so a re-render mid-fetch —
+  // or reopening the node — can't fire this twice. Only the hostname script is
+  // authored; see `serverManagedScripts` for why the rest can't be.
+  useEffect(() => {
+    if (!node || deploying) return
+    const { typeId, name, lifecycle, isoAuthoring } = node.data
+    if (isoAuthoring?.seeded || !seedsFirstbootScripts(typeId)) return
+    // Never seed a realized node: `setIsoAuthoring` would flag it as drifted.
+    // `staged` is included so a node from the PKI starter template — which
+    // arrives pre-configured — gets the same disc as a hand-dropped one.
+    if (
+      lifecycle !== LIFECYCLE.draft &&
+      lifecycle !== LIFECYCLE.failed &&
+      lifecycle !== LIFECYCLE.staged
+    ) {
+      return
+    }
+
+    setIsoAuthoring(nodeId, {
+      enabled: true,
+      mode: ISO_MODES.pack,
+      seeded: true,
+    })
+    const platform = templatePlatform(typeId)
+    generateHostname({ platform, hostname: defaultHostname(name, platform) })
+      .then((script) => {
+        const current = useTopologyStore
+          .getState()
+          .nodes.find((n) => n.id === nodeId)?.data.isoAuthoring
+        // Only fill an untouched grid — the operator may have added a file, or
+        // flipped the toggle back off, while this was in flight.
+        if (!current?.enabled || current.files.length > 0) return
+        setIsoAuthoring(nodeId, {
+          files: [{ name: hostnameScriptName(platform), content: script }],
+        })
+      })
+      .catch(() => {
+        // Seeding is a convenience; an empty grid is a fine starting point and
+        // the server renders its own hostname script when none is authored.
+      })
+  }, [node, nodeId, deploying, setIsoAuthoring])
+
   if (!node) return null
   const templateId = node.data.typeId
   const iso = node.data.isoAuthoring ?? EMPTY_ISO
   const files = [...iso.files].sort((a, b) => a.name.localeCompare(b.name))
+  // An authored override moves that script into the editable grid, so it stops
+  // being "server-managed" — except the agent install, which always is.
+  const serverManaged = serverManagedScripts(templateId).filter(
+    (script) =>
+      script.name === "40-install-executor.ps1" ||
+      !files.some((file) => file.name === script.name),
+  )
   const editingFile = editing
     ? (files.find((f) => f.name === editing) ?? null)
     : null
@@ -244,11 +358,6 @@ export function IsoAuthoringPanel({ nodeId }: { nodeId: string }) {
 
       {iso.enabled && (
         <>
-          <p className="text-[11px] leading-4 text-muted-foreground">
-            The authored ISO replaces all generated config — this VM gets no
-            pool IP and no hostname/network scripts unless you provide them.
-          </p>
-
           {/* Mode segmented control */}
           <div className="grid grid-cols-2 gap-0.5 rounded-md border p-0.5 text-xs">
             {(
@@ -275,6 +384,11 @@ export function IsoAuthoringPanel({ nodeId }: { nodeId: string }) {
 
           {iso.mode === ISO_MODES.pack ? (
             <>
+              <p className="text-[11px] leading-4 text-muted-foreground">
+                These scripts are packed over the generated set — a file named
+                after one below replaces it.
+              </p>
+
               {/* File-manager grid: one icon per script, double-click to edit */}
               {files.length > 0 ? (
                 <div className="grid grid-cols-3 gap-1">
@@ -338,9 +452,38 @@ export function IsoAuthoringPanel({ nodeId }: { nodeId: string }) {
               >
                 <Wand2 className="h-3 w-3" /> Generate from template
               </Button>
+
+              {/* The server's half of the disc. Rows an authored file overrides
+                  drop out — the editable copy in the grid above is then the
+                  truth (the agent's install step is never overridable). */}
+              {serverManaged.length > 0 && (
+                <div className="flex flex-col gap-1 border-t pt-2">
+                  <p className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Server-managed
+                  </p>
+                  {serverManaged.map((script) => (
+                    <div
+                      key={script.name}
+                      title={script.detail}
+                      className="flex items-start gap-2 rounded-md border border-dashed bg-muted/30 p-2 text-[10px] text-muted-foreground"
+                    >
+                      <Lock className="mt-0.5 h-3 w-3 shrink-0" />
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate font-medium">{script.name}</p>
+                        <p className="leading-4">{script.detail}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </>
           ) : (
             <>
+              <p className="text-[11px] leading-4 text-muted-foreground">
+                An uploaded ISO is the complete disc — this VM gets no pool IP,
+                no hostname/network scripts and no phone-home agent.
+              </p>
+
               {iso.isoId ? (
                 <div className="flex items-center gap-2 rounded-md border p-2 text-xs">
                   <Disc3 className="h-4 w-4 shrink-0 text-primary" />

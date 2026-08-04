@@ -240,6 +240,18 @@
   }
 }
 
+/* While the DC's forest is actually being installed. Floors at 0.2 rather than 0
+   so the boundary and its member wells never blink out entirely. */
+@keyframes domain-install-pulse {
+  0%,
+  100% {
+    opacity: 0.2;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
 @keyframes domain-accept {
   0%,
   100% {
@@ -346,6 +358,10 @@
   animation: domain-well-drift 5.6s ease-in-out infinite;
 }
 
+.domain-region-installing {
+  animation: domain-install-pulse 1.8s ease-in-out infinite;
+}
+
 .domain-region-accepting {
   animation: domain-accept 1.5s ease-in-out infinite;
 }
@@ -357,6 +373,7 @@
 @media (prefers-reduced-motion: reduce) {
   .domain-region-empty,
   .domain-member-well,
+  .domain-region-installing,
   .domain-region-accepting,
   .domain-region-rejecting,
   .trust-body {
