@@ -104,6 +104,51 @@ describe("lab evidence projection", () => {
     })
   })
 
+  it("degrades rather than breaks a service whose only faults are advisory", () => {
+    const report: LabHealthReport = {
+      healthy: true,
+      failures: [],
+      warnings: ["the Online Responder returned HTTP 500"],
+      checks: {
+        ...checks,
+        certificate: {
+          ...checks.certificate,
+          ocsp: { ok: false, advisory: true },
+          revocationFreshness: { ok: false, advisory: true },
+        },
+        ocspResponder: { ok: false, advisory: true },
+      },
+    }
+
+    expect(serviceHealthForEdge(publication, nodes, evidence(report))).toEqual({
+      [CONNECTION_PORT.caPublication]: CONNECTION_HEALTH.verified,
+      [CONNECTION_PORT.webHost]: CONNECTION_HEALTH.verified,
+      [CONNECTION_PORT.probeCertificate]: CONNECTION_HEALTH.degraded,
+    })
+  })
+
+  it("breaks a service that mixes an advisory fault with a real one", () => {
+    const report: LabHealthReport = {
+      healthy: false,
+      failures: ["the chain did not build"],
+      warnings: ["the Online Responder returned HTTP 500"],
+      checks: {
+        ...checks,
+        certificate: {
+          ...checks.certificate,
+          chain: { ok: false },
+          ocsp: { ok: false, advisory: true },
+        },
+      },
+    }
+
+    expect(
+      serviceHealthForEdge(publication, nodes, evidence(report))[
+        CONNECTION_PORT.probeCertificate
+      ],
+    ).toBe(CONNECTION_HEALTH.broken)
+  })
+
   it("uses the least healthy service as the edge summary", () => {
     expect(
       aggregateServiceHealth(

@@ -17,12 +17,20 @@ import { edgeServiceSocket } from "@/lib/topology"
 
 export interface HealthCheck {
   ok: boolean
+  /**
+   * Set by the backend gate on a check that failed without failing the deploy —
+   * an OCSP fault in a lab whose CRL revocation still verifies, or a fact fully
+   * explained by a failure already reported. Renders degraded, not broken.
+   */
+  advisory?: boolean
   detail?: unknown
 }
 
 export interface LabHealthReport {
   healthy: boolean
   failures: string[]
+  /** Non-fatal counterparts to `failures`; absent on evidence written before they existed. */
+  warnings?: string[]
   checks: {
     certificate?: Record<string, HealthCheck>
     enterprisePki?: Record<string, HealthCheck>
@@ -75,23 +83,37 @@ export function findLabEvidence(
   return nodes.find((node) => node.data.labEvidence)?.data.labEvidence ?? null
 }
 
-function check(report: LabHealthReport, path: string): boolean {
-  const parts = path.split(".")
+function resolve(
+  report: LabHealthReport,
+  path: string,
+): Partial<HealthCheck> | null {
   let value: unknown = report.checks
-  for (const part of parts) {
-    if (!value || typeof value !== "object") return false
+  for (const part of path.split(".")) {
+    if (!value || typeof value !== "object") return null
     value = (value as Record<string, unknown>)[part]
   }
-  return (
-    !!value &&
-    typeof value === "object" &&
-    (value as Partial<HealthCheck>).ok === true
-  )
+  return value && typeof value === "object"
+    ? (value as Partial<HealthCheck>)
+    : null
 }
 
+function check(report: LabHealthReport, path: string): boolean {
+  return resolve(report, path)?.ok === true
+}
+
+/**
+ * Project a set of check paths onto one service's health.
+ *
+ * A service whose only failing checks are `advisory` reads degraded rather than
+ * broken: the backend has decided those faults don't fail the deploy, and a red
+ * segment on a lab the gate passed would contradict it. An unresolvable path is
+ * treated as broken, not advisory — absent evidence is not a soft failure.
+ */
 function health(report: LabHealthReport, ...paths: string[]): ConnectionHealth {
-  return paths.every((path) => check(report, path))
-    ? CONNECTION_HEALTH.verified
+  const failing = paths.filter((path) => !check(report, path))
+  if (failing.length === 0) return CONNECTION_HEALTH.verified
+  return failing.every((path) => resolve(report, path)?.advisory === true)
+    ? CONNECTION_HEALTH.degraded
     : CONNECTION_HEALTH.broken
 }
 
