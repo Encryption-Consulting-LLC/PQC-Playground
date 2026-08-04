@@ -34,6 +34,7 @@ import {
   isPasswordValid,
   passwordRules,
 } from "@/lib/passwordPolicy"
+import { syncHostnameScript } from "@/lib/hostnameSync"
 import { projectNetbiosPrefix } from "@/lib/projectNaming"
 import { OP_KIND, OP_STATUS } from "@/lib/staging"
 import type { StagedOp } from "@/lib/staging"
@@ -606,6 +607,7 @@ export function Inspector() {
     const trimmed = draftName.trim()
     if (trimmed && trimmed !== data.name) {
       store.renameNode(nodeId, trimmed)
+      syncHostnameScript(nodeId, trimmed)
       toast.success(`Renamed to "${trimmed}"`)
     }
     setEditingName(false)
