@@ -1,0 +1,294 @@
+{
+  "certificate-health": {
+    "aia": {
+      "ok": true,
+      "verified_certificates": 4
+    },
+    "cdp": {
+      "ok": true,
+      "verified_base_crls": 4,
+      "verified_delta_crls": 4
+    },
+    "certificates": [
+      {
+        "not_after": "2027-08-04T00:16:27.0000000Z",
+        "not_before": "2026-08-04T00:16:27.0000000Z",
+        "role": "probe",
+        "signature_oid": "2.16.840.1.101.3.4.3.19",
+        "subject": "",
+        "thumbprint": "6C85B57633AEB782DB9D2091D29EFBD85F40EB36",
+        "valid_now": true
+      },
+      {
+        "not_after": "2036-08-03T23:33:18.0000000Z",
+        "not_before": "2026-08-03T23:23:18.0000000Z",
+        "role": "issuing",
+        "signature_oid": "2.16.840.1.101.3.4.3.19",
+        "subject": "CN=EC-Issuing-CA, DC=encon, DC=pki",
+        "thumbprint": "85AFEB04D12860318C11D4FDFDE481D578CA3B56",
+        "valid_now": true
+      },
+      {
+        "not_after": "2046-08-03T22:31:44.0000000Z",
+        "not_before": "2026-08-03T22:21:50.0000000Z",
+        "role": "root",
+        "signature_oid": "2.16.840.1.101.3.4.3.19",
+        "subject": "CN=EC-Root-CA",
+        "thumbprint": "46C7A5E780B265FCD3CB1644B2A37DA87B8B18F8",
+        "valid_now": true
+      }
+    ],
+    "chain": {
+      "ok": true
+    },
+    "chain_ok": true,
+    "healthy": false,
+    "ml_dsa": {
+      "expected_oid": "2.16.840.1.101.3.4.3.19",
+      "ok": true
+    },
+    "ocsp": {
+      "ok": false,
+      "verified_responses": 0
+    },
+    "revocation_freshness": {
+      "ok": false
+    },
+    "urls": [
+      "http://99646f-srv1.encon.pki/ocsp",
+      "http://pki.encon.pki/CertEnroll/99646f-ca01_EC-Root-CA.crt",
+      "http://pki.encon.pki/CertEnroll/99646f-ca02.encon.pki_EC-Issuing-CA.crt",
+      "http://pki.encon.pki/CertEnroll/EC-Issuing-CA.crl",
+      "http://pki.encon.pki/CertEnroll/EC-Issuing-CA+.crl",
+      "http://pki.encon.pki/CertEnroll/EC-Root-CA.crl"
+    ],
+    "validity": {
+      "ok": true
+    }
+  },
+  "dns-health-issuing": {
+    "ad_srv_ok": true,
+    "all_verified": true,
+    "http_ok": true,
+    "records": [
+      {
+        "actual": [
+          "192.168.181.5"
+        ],
+        "expected": "192.168.181.5",
+        "id": "dns:a:domainController-1-1785793003696:certificateAuthority-2-1785793003695",
+        "kind": "A",
+        "ok": true
+      },
+      {
+        "actual": [
+          "192.168.181.7"
+        ],
+        "expected": "192.168.181.7",
+        "id": "dns:a:domainController-1-1785793003696:domainController-1-1785793003696",
+        "kind": "A",
+        "ok": true
+      },
+      {
+        "actual": [
+          "192.168.181.8"
+        ],
+        "expected": "192.168.181.8",
+        "id": "dns:a:domainController-1-1785793003696:webServer-1-1785793003696",
+        "kind": "A",
+        "ok": true
+      },
+      {
+        "actual": [
+          "99646f-srv1.encon.pki"
+        ],
+        "expected": "99646f-srv1.encon.pki",
+        "id": "dns:cname:domainController-1-1785793003696:pki",
+        "kind": "CNAME",
+        "ok": true
+      }
+    ],
+    "srv": [
+      {
+        "name": "_ldap._tcp.encon.pki",
+        "ok": true
+      },
+      {
+        "name": "_kerberos._tcp.encon.pki",
+        "ok": true
+      },
+      {
+        "name": "_ldap._tcp.dc._msdcs.encon.pki",
+        "ok": true
+      }
+    ]
+  },
+  "dns-health-web": {
+    "ad_srv_ok": true,
+    "all_verified": true,
+    "http_ok": true,
+    "records": [
+      {
+        "actual": [
+          "192.168.181.5"
+        ],
+        "expected": "192.168.181.5",
+        "id": "dns:a:domainController-1-1785793003696:certificateAuthority-2-1785793003695",
+        "kind": "A",
+        "ok": true
+      },
+      {
+        "actual": [
+          "192.168.181.7"
+        ],
+        "expected": "192.168.181.7",
+        "id": "dns:a:domainController-1-1785793003696:domainController-1-1785793003696",
+        "kind": "A",
+        "ok": true
+      },
+      {
+        "actual": [
+          "192.168.181.8"
+        ],
+        "expected": "192.168.181.8",
+        "id": "dns:a:domainController-1-1785793003696:webServer-1-1785793003696",
+        "kind": "A",
+        "ok": true
+      },
+      {
+        "actual": [
+          "99646f-srv1.encon.pki"
+        ],
+        "expected": "99646f-srv1.encon.pki",
+        "id": "dns:cname:domainController-1-1785793003696:pki",
+        "kind": "CNAME",
+        "ok": true
+      }
+    ],
+    "srv": [
+      {
+        "name": "_ldap._tcp.encon.pki",
+        "ok": true
+      },
+      {
+        "name": "_kerberos._tcp.encon.pki",
+        "ok": true
+      },
+      {
+        "name": "_ldap._tcp.dc._msdcs.encon.pki",
+        "ok": true
+      }
+    ]
+  },
+  "enterprise-pki-health": {
+    "containers": {
+      "aia": true,
+      "cdp": false,
+      "certification_authorities": true,
+      "enrollment_services": true,
+      "nt_auth": true
+    },
+    "healthy": false,
+    "http_artifacts": {
+      "ok": true,
+      "results": [
+        {
+          "ok": true,
+          "status": 200,
+          "url": "http://pki.encon.pki/CertEnroll/99646f-ca01_EC-Root-CA.crt"
+        },
+        {
+          "ok": true,
+          "status": 200,
+          "url": "http://pki.encon.pki/CertEnroll/EC-Root-CA.crl"
+        },
+        {
+          "ok": true,
+          "status": 200,
+          "url": "http://pki.encon.pki/CertEnroll/99646f-ca02.encon.pki_EC-Issuing-CA.crt"
+        },
+        {
+          "ok": true,
+          "status": 200,
+          "url": "http://pki.encon.pki/CertEnroll/EC-Issuing-CA.crl"
+        },
+        {
+          "ok": true,
+          "status": 200,
+          "url": "http://pki.encon.pki/CertEnroll/EC-Issuing-CA+.crl"
+        }
+      ]
+    },
+    "observed": {
+      "aia": [
+        "EC-Issuing-CA",
+        "EC-Root-CA"
+      ],
+      "cdp": [
+        "99646f-ca01",
+        "99646f-ca02"
+      ],
+      "certification_authorities": "EC-Root-CA",
+      "enrollment_services": "EC-Issuing-CA"
+    },
+    "templates": {
+      "missing": [],
+      "ok": true,
+      "required": [
+        "OCSPResponseSigning",
+        "Workstation"
+      ]
+    }
+  },
+  "identity-dc": {
+    "hostname": "99646F-DC01",
+    "operating_system": "Microsoft Windows Server 2025 Datacenter",
+    "product_type": 2,
+    "server": true,
+    "version": "10.0.26100"
+  },
+  "identity-issuing": {
+    "hostname": "99646F-CA02",
+    "operating_system": "Microsoft Windows Server 2025 Datacenter",
+    "product_type": 3,
+    "server": true,
+    "version": "10.0.26100"
+  },
+  "identity-root": {
+    "hostname": "99646F-CA01",
+    "operating_system": "Microsoft Windows Server 2025 Datacenter",
+    "product_type": 3,
+    "server": true,
+    "version": "10.0.26100"
+  },
+  "identity-web": {
+    "hostname": "99646F-SRV1",
+    "operating_system": "Microsoft Windows Server 2025 Datacenter",
+    "product_type": 3,
+    "server": true,
+    "version": "10.0.26100"
+  },
+  "issuing-ca-health": {
+    "ping_ok": true,
+    "raw": "{\r\n    \"pingOk\":  true,\r\n    \"service\":  \"Running\",\r\n    \"ping\":  \"Connecting to 99646f-ca02.encon.pki\\\\EC-Issuing-CA ...\\nServer \\\"EC-Issuing-CA\\\" ICertRequest2 interface is alive (16ms)\\nCertUtil: -ping command completed successfully.\"\r\n}\r\n",
+    "service": "Running"
+  },
+  "ocsp-health": {
+    "configurations": [
+      {
+        "caConfig": "99646f-ca02.encon.pki\\EC-Issuing-CA",
+        "hashAlgorithm": "SHA256",
+        "identifier": "EC-Issuing-CA",
+        "template": "OCSPResponseSigning"
+      }
+    ],
+    "configured": true,
+    "http_status": 500,
+    "raw": "{\r\n    \"configurations\":  [\r\n                           {\r\n                               \"caConfig\":  \"99646f-ca02.encon.pki\\\\EC-Issuing-CA\",\r\n                               \"template\":  \"OCSPResponseSigning\",\r\n                               \"hashAlgorithm\":  \"SHA256\",\r\n                               \"identifier\":  \"EC-Issuing-CA\"\r\n                           }\r\n                       ],\r\n    \"httpStatus\":  500\r\n}\r\n"
+  },
+  "root-ca-health": {
+    "ping_ok": true,
+    "raw": "{\r\n    \"pingOk\":  true,\r\n    \"service\":  \"Running\",\r\n    \"ping\":  \"Connecting to 99646f-ca01\\\\EC-Root-CA ...\\nServer \\\"EC-Root-CA\\\" ICertRequest2 interface is alive (15ms)\\nCertUtil: -ping command completed successfully.\"\r\n}\r\n",
+    "service": "Running"
+  }
+}

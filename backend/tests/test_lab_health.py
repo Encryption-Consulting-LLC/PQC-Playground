@@ -1,12 +1,16 @@
 """Structured final lab-health aggregation is strict and diagnostic."""
 
+import json
 from copy import deepcopy
+from pathlib import Path
 
 from app.core.sequences.health import (
     ML_DSA_87_SIGNATURE_OID,
     aggregate_lab_health,
 )
 from app.core.sequences.model import NodeContext, RunContext, StepRuntime
+
+_FIXTURES = Path(__file__).parent / "fixtures"
 
 
 def _node(role: str) -> NodeContext:
@@ -98,7 +102,6 @@ def test_each_required_certificate_fact_is_a_hard_gate() -> None:
         ("chain", "ok"),
         ("aia", "ok"),
         ("cdp", "ok"),
-        ("ocsp", "ok"),
         ("ml_dsa", "ok"),
         ("validity", "ok"),
         ("revocation_freshness", "ok"),
@@ -121,7 +124,7 @@ def test_derived_revocation_freshness_is_not_reported_twice() -> None:
 
     report = aggregate_lab_health(_runtime(), results)
 
-    assert report["failures"] == [
+    assert report["warnings"] == [
         "the issued probe did not receive a verified OCSP response"
     ]
     freshness = report["checks"]["certificate"]["revocationFreshness"]
@@ -181,17 +184,49 @@ def test_cdp_is_unassertable_without_observed_names() -> None:
     assert "cdp" not in report["checks"]["enterprisePki"]["containers"]["detail"]
 
 
-def test_a_configured_responder_that_errors_still_fails_the_gate() -> None:
+def test_a_configured_responder_that_errors_is_reported_by_status() -> None:
     """`configured` proves the config exists, not that the responder can answer."""
     results = deepcopy(_healthy_results())
     results["ocsp-health"]["http_status"] = 500
 
     report = aggregate_lab_health(_runtime(), results)
 
-    assert report["healthy"] is False
-    assert "Online Responder" in "; ".join(report["failures"])
-    assert "HTTP 500" in "; ".join(report["failures"])
+    assert "Online Responder" in "; ".join(report["warnings"])
+    assert "HTTP 500" in "; ".join(report["warnings"])
+    assert report["checks"]["ocspResponder"]["ok"] is False
     assert report["checks"]["ocspResponder"]["detail"]["httpStatus"] == 500
+
+
+def test_a_dead_responder_does_not_fail_a_lab_that_revokes_over_crl() -> None:
+    """The prod shape: chain + CRLs verify, only the responder is broken."""
+    results = deepcopy(_healthy_results())
+    results["certificate-health"]["ocsp"] = {"ok": False, "verified_responses": 0}
+    results["certificate-health"]["revocation_freshness"] = {"ok": False}
+    results["ocsp-health"]["http_status"] = 500
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["healthy"] is True
+    assert report["failures"] == []
+    assert len(report["warnings"]) == 2
+    assert report["checks"]["certificate"]["ocsp"]["advisory"] is True
+    assert report["checks"]["ocspResponder"]["advisory"] is True
+
+
+def test_a_dead_responder_is_fatal_when_crl_revocation_is_also_broken() -> None:
+    """With neither CRL nor OCSP there is no revocation left to fall back on."""
+    results = deepcopy(_healthy_results())
+    results["certificate-health"]["cdp"] = {"ok": False}
+    results["certificate-health"]["ocsp"] = {"ok": False}
+    results["ocsp-health"]["http_status"] = 500
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["healthy"] is False
+    joined = "; ".join(report["failures"])
+    assert "verified OCSP response" in joined
+    assert "Online Responder" in joined
+    assert "advisory" not in report["checks"]["certificate"]["ocsp"]
 
 
 def test_a_serving_responder_passes_the_gate() -> None:
@@ -218,3 +253,47 @@ def test_wrong_runtime_identity_fails_the_gate() -> None:
 
     assert report["healthy"] is False
     assert "expected Windows Server host guest-lab-web" in "; ".join(report["failures"])
+
+
+def test_the_recorded_prod_run_now_passes_with_one_ocsp_warning() -> None:
+    """Replay of a real four-VM run that failed with three messages.
+
+    Job ``e99d07f72c6c4db284af16b8240dae02`` reported "the issued probe did not
+    receive a verified OCSP response; revocation evidence is stale or unavailable;
+    one or more AD enterprise PKI containers are unhealthy". Only the first named
+    a real fault: the container check compared CA common names against ``CN=CDP``'s
+    host-named children, and freshness was derived from the same OCSP failure. The
+    responder answered HTTP 500 with no signing certificate bound, while its CRLs
+    verified 4 base and 4 delta -- so the lab revokes, and the gate should say so
+    without stranding the deploy.
+    """
+    results = json.loads((_FIXTURES / "lab_health_ocsp_500.json").read_text())
+    nodes = {
+        alias: NodeContext(
+            node_id=alias,
+            vm_name=f"guest-guest-99646f-{host}",
+            hostname=f"99646f-{host}",
+            agent_vm_id=f"agent-{alias}",
+        )
+        for alias, host in (
+            ("dc", "dc01"),
+            ("root", "ca01"),
+            ("ca", "ca02"),
+            ("web", "srv1"),
+        )
+    }
+    runtime = StepRuntime(
+        ctx=RunContext(nodes=nodes, pki_host="pki.encon.pki"), node=nodes["web"]
+    )
+
+    report = aggregate_lab_health(runtime, results)
+
+    assert report["healthy"] is True
+    assert report["failures"] == []
+    assert report["warnings"] == [
+        "the issued probe did not receive a verified OCSP response",
+        "the Online Responder at http://pki.encon.pki/ocsp returned HTTP 500",
+    ]
+    # The two misattributed messages are gone, and for the right reasons.
+    assert report["checks"]["enterprisePki"]["containers"]["ok"] is True
+    assert report["checks"]["certificate"]["revocationFreshness"]["advisory"] is True

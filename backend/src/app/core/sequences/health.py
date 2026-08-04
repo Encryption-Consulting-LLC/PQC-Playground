@@ -72,6 +72,7 @@ def aggregate_lab_health(
     """Combine fresh remote facts from all four machines into one verdict."""
 
     failures: list[str] = []
+    warnings: list[str] = []
 
     def check(
         name: str,
@@ -79,19 +80,21 @@ def aggregate_lab_health(
         failure: str,
         detail: Any = None,
         *,
+        fatal: bool = True,
         report: bool = True,
     ) -> dict[str, Any]:
         """Record one gate fact.
 
-        ``report=False`` keeps the observation in ``checks`` but withholds its
-        message, for a fact that is fully explained by another failure already
-        reported. Such a check is marked ``advisory`` so a consumer can tell a
-        false that failed the gate from one that did not.
+        ``fatal=False`` routes the message to ``warnings``, where it is reported
+        without failing the gate. ``report=False`` withholds it entirely, for a
+        fact fully explained by another failure already reported. Either way the
+        check is marked ``advisory`` so a consumer can tell a false that failed
+        the gate from one that did not.
         """
         if not ok and report:
-            failures.append(failure)
+            (failures if fatal else warnings).append(failure)
         item: dict[str, Any] = {"ok": ok}
-        if not ok and not report:
+        if not ok and not (fatal and report):
             item["advisory"] = True
         if detail is not None:
             item["detail"] = detail
@@ -101,6 +104,13 @@ def aggregate_lab_health(
     chain_ok = _nested(cert, "chain", "ok") is True
     cdp_ok = _nested(cert, "cdp", "ok") is True
     ocsp_ok = _nested(cert, "ocsp", "ok") is True
+    # A lab whose chain builds and whose base and delta CRLs both verify has
+    # working revocation without the responder, so an OCSP fault is reported
+    # rather than fatal -- the alternative is failing a deploy, and stranding
+    # four real VMs, over a lab that is usable for everything the CRL covers.
+    # With CRL retrieval also broken there is no revocation at all, and OCSP goes
+    # back to being a hard gate.
+    crl_fallback = chain_ok and cdp_ok
     certificate = {
         "chain": check(
             "chain",
@@ -124,6 +134,7 @@ def aggregate_lab_health(
             ocsp_ok,
             "the issued probe did not receive a verified OCSP response",
             cert.get("ocsp"),
+            fatal=not crl_fallback,
         ),
         "mlDsa": check(
             "mlDsa",
@@ -226,6 +237,7 @@ def aggregate_lab_health(
             "httpStatus": responder_status,
             "configurations": ocsp_result.get("configurations"),
         },
+        fatal=not crl_fallback,
     )
 
     dns = {}
@@ -270,6 +282,7 @@ def aggregate_lab_health(
     return {
         "healthy": not failures,
         "failures": failures,
+        "warnings": warnings,
         "checks": {
             "certificate": certificate,
             "enterprisePki": enterprise_pki,
