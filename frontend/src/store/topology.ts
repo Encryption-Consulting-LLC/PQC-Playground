@@ -805,9 +805,20 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
   renameNode(id, name) {
     if (useStagingStore.getState().deploying) return
     set((s) => ({
-      nodes: s.nodes.map((n) =>
-        n.id === id ? { ...n, data: { ...n.data, name } } : n,
-      ),
+      nodes: s.nodes.map((n) => {
+        if (n.id !== id) return n
+        // Defense in depth behind the Inspector's own lock (mirroring
+        // `setNodeConfig`): from `staged` on, a createVm op names the real clone
+        // after this and its hostname script is rendered from it, so a late
+        // rename would silently disagree with what gets deployed.
+        if (
+          n.data.lifecycle !== LIFECYCLE.draft &&
+          n.data.lifecycle !== LIFECYCLE.failed
+        ) {
+          return n
+        }
+        return { ...n, data: { ...n.data, name } }
+      }),
     }))
   },
 

@@ -598,6 +598,14 @@ export function Inspector() {
   const domain = domainMembership(nodeId, edges, nodes)
   const netbiosPrefix = projectNetbiosPrefix(activeProjectId)
 
+  // Only an unconfigured node can be renamed: anything further along has a
+  // staged (or executed) createVm whose VM name and hostname script derive from
+  // this. `revertOp` puts the node back to `draft` when that op is removed, so
+  // the field re-opens on its own — no extra state to track.
+  const nameLocked =
+    !!data.vmName ||
+    (data.lifecycle !== LIFECYCLE.draft && data.lifecycle !== LIFECYCLE.failed)
+
   function startRename() {
     setDraftName(data.name)
     setEditingName(true)
@@ -820,16 +828,20 @@ export function Inspector() {
           )}
         </section>
 
-        {/* Rename — locked once a real VM exists: the name is baked into the
-            deployed VM's inventory name (guest-<user>-<project>-<machine>), so
-            it can't change after deployment. */}
+        {/* Rename — locked from Configure onwards. The name is what the clone is
+            named after (and what the hostname script is rendered from), so once
+            a createVm op is staged it is committed; removing that op from the
+            Staged tab returns the node to `draft` and re-opens this. Past deploy
+            it's baked into the VM's inventory name (guest-<user>-<project>-<
+            machine>) and can never change. */}
         <section className="flex flex-col gap-2">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-muted-foreground">
             Name
           </p>
-          {data.vmName ? (
+          {nameLocked ? (
             <p className="text-xs text-muted-foreground">
-              {data.name} — locked after deploy
+              {data.name} —{" "}
+              {data.vmName ? "locked after deploy" : "locked after configure"}
             </p>
           ) : editingName ? (
             <div className="flex gap-1">
