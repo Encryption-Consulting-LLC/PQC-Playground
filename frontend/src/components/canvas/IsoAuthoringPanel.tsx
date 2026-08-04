@@ -143,7 +143,15 @@ export function IsoAuthoringPanel({ nodeId }: { nodeId: string }) {
     const { typeId, name, lifecycle, isoAuthoring } = node.data
     if (isoAuthoring?.seeded || !seedsFirstbootScripts(typeId)) return
     // Never seed a realized node: `setIsoAuthoring` would flag it as drifted.
-    if (lifecycle !== LIFECYCLE.draft && lifecycle !== LIFECYCLE.failed) return
+    // `staged` is included so a node from the PKI starter template — which
+    // arrives pre-configured — gets the same disc as a hand-dropped one.
+    if (
+      lifecycle !== LIFECYCLE.draft &&
+      lifecycle !== LIFECYCLE.failed &&
+      lifecycle !== LIFECYCLE.staged
+    ) {
+      return
+    }
 
     setIsoAuthoring(nodeId, {
       enabled: true,
