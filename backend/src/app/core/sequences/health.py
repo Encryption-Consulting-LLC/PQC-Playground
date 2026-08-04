@@ -78,19 +78,33 @@ def aggregate_lab_health(
         ok: bool,
         failure: str,
         detail: Any = None,
+        *,
+        report: bool = True,
     ) -> dict[str, Any]:
-        if not ok:
+        """Record one gate fact.
+
+        ``report=False`` keeps the observation in ``checks`` but withholds its
+        message, for a fact that is fully explained by another failure already
+        reported. Such a check is marked ``advisory`` so a consumer can tell a
+        false that failed the gate from one that did not.
+        """
+        if not ok and report:
             failures.append(failure)
         item: dict[str, Any] = {"ok": ok}
+        if not ok and not report:
+            item["advisory"] = True
         if detail is not None:
             item["detail"] = detail
         return item
 
     cert = results.get("certificate-health", {})
+    chain_ok = _nested(cert, "chain", "ok") is True
+    cdp_ok = _nested(cert, "cdp", "ok") is True
+    ocsp_ok = _nested(cert, "ocsp", "ok") is True
     certificate = {
         "chain": check(
             "chain",
-            _nested(cert, "chain", "ok") is True,
+            chain_ok,
             "certificate chain did not build successfully",
         ),
         "aia": check(
@@ -101,13 +115,13 @@ def aggregate_lab_health(
         ),
         "cdp": check(
             "cdp",
-            _nested(cert, "cdp", "ok") is True,
+            cdp_ok,
             "required base and delta CRLs were not both verified through CDP",
             cert.get("cdp"),
         ),
         "ocsp": check(
             "ocsp",
-            _nested(cert, "ocsp", "ok") is True,
+            ocsp_ok,
             "the issued probe did not receive a verified OCSP response",
             cert.get("ocsp"),
         ),
@@ -124,11 +138,19 @@ def aggregate_lab_health(
             "one or more probe-chain certificates are outside their validity window",
             cert.get("certificates"),
         ),
+        # Not independent evidence: `cert.verify` derives freshness as
+        # `chain and cdp and ocsp` -- it measures no CRL age or OCSP `producedAt`
+        # at all. Reporting it whenever one of those three fails restated that
+        # failure as a second, differently worded one ("the probe did not receive
+        # a verified OCSP response; revocation evidence is stale or unavailable"
+        # was one fault counted twice). Only speak up when it disagrees with the
+        # facts it is derived from, which is the only case where it adds anything.
         "revocationFreshness": check(
             "revocationFreshness",
             _nested(cert, "revocation_freshness", "ok") is True,
             "revocation evidence is stale or unavailable",
             cert.get("revocation_freshness"),
+            report=chain_ok and cdp_ok and ocsp_ok,
         ),
     }
 

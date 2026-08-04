@@ -113,6 +113,22 @@ def test_each_required_certificate_fact_is_a_hard_gate() -> None:
         assert report["failures"], section
 
 
+def test_derived_revocation_freshness_is_not_reported_twice() -> None:
+    """`cert.verify` derives freshness from chain+cdp+ocsp, so it echoes them."""
+    results = deepcopy(_healthy_results())
+    results["certificate-health"]["ocsp"] = {"ok": False, "verified_responses": 0}
+    results["certificate-health"]["revocation_freshness"] = {"ok": False}
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["failures"] == [
+        "the issued probe did not receive a verified OCSP response"
+    ]
+    freshness = report["checks"]["certificate"]["revocationFreshness"]
+    assert freshness["ok"] is False
+    assert freshness["advisory"] is True
+
+
 def test_missing_enterprise_container_fails_with_diagnostic() -> None:
     results = _healthy_results()
     results["enterprise-pki-health"]["containers"]["nt_auth"] = False
