@@ -27,6 +27,7 @@ import {
   transitiveDependents,
 } from "@/lib/staging"
 import type { StagedOp } from "@/lib/staging"
+import { formatElapsed } from "@/lib/duration"
 import {
   compileDeployPlan,
   type CompiledDeployPlan,
@@ -198,7 +199,7 @@ function DeploymentProgress({
               aria-hidden="true"
               className="shrink-0 text-[10px] tabular-nums text-muted-foreground"
             >
-              {elapsedSec}s
+              {formatElapsed(elapsedSec)}
             </span>
           )}
         </div>
