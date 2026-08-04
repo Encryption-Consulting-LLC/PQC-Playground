@@ -303,3 +303,18 @@ export const AUTO_NAME_PREFIX: Record<string, string> = {
 export function templatePlatform(typeId: string): "linux" | "windows" {
   return TEMPLATE_BY_ID[typeId]?.platform ?? "windows"
 }
+
+/**
+ * Whether dropping this template should pre-fill the Inspector's Config ISO
+ * panel (see `IsoAuthoringPanel`) instead of leaving it off and empty.
+ *
+ * True for the PKI *component* roles — a DC/CA/web server has a firstboot disc
+ * worth disclosing, so an operator can see and edit the hostname script rather
+ * than guess at what boots. Excluded: `standalone` (a bare Windows Server with
+ * nothing role-specific to show) and the Linux `product` templates (which
+ * cannot carry the Windows agent at all).
+ */
+export function seedsFirstbootScripts(typeId: string): boolean {
+  const def = TEMPLATE_BY_ID[typeId]
+  return !!def && def.category !== "product" && typeId !== "standalone"
+}

@@ -56,6 +56,7 @@ import {
   WS_CLOSE_JOB_GONE,
   WS_CLOSE_UNAUTHORIZED,
 } from "@/lib/ws"
+import { ROLES } from "@/constants"
 import { useAuthStore } from "@/store/auth"
 import { useProjectsStore } from "@/store/projects"
 import { saveActiveProjectNow } from "@/lib/projectSync"
@@ -199,7 +200,14 @@ export interface PreparedDeployPlan {
  * and decides for itself; there is no client `simulate` flag anymore. An
  * enabled ISO panel rides as either name-sorted inline `files` (PACK —
  * matching the 10-/20-/30- manifest order convention) or an `isoId` param
- * (UPLOAD-ISO); the backend then injects nothing and allocates no pool IP.
+ * (UPLOAD-ISO). Only UPLOAD-ISO makes the backend inject nothing and allocate
+ * no pool IP; PACK files are layered over the rendered disc.
+ *
+ * `files` are withheld from a non-operator: `ISO_AUTHOR` is operator-only, so
+ * the backend 403s the whole plan on any inline content. That is reachable
+ * without the panel — a share-linked project can carry `isoAuthoring` seeded by
+ * the operator who owns it — and the seeded default is exactly what the server
+ * would render anyway, so dropping it costs nothing.
  */
 function buildOpPayload(op: StagedOp): Pick<PlanOpPayload, "params" | "files"> {
   if (op.kind !== OP_KIND.createVm) return { params: op.params }
@@ -218,7 +226,11 @@ function buildOpPayload(op: StagedOp): Pick<PlanOpPayload, "params" | "files"> {
     params.isoId = iso.isoId
     return { params }
   }
-  if (iso.mode === "pack" && iso.files.length > 0) {
+  if (
+    iso.mode === "pack" &&
+    iso.files.length > 0 &&
+    useAuthStore.getState().role === ROLES.operator
+  ) {
     const files = [...iso.files]
       .sort((a, b) => a.name.localeCompare(b.name))
       .map(({ name, content }) => ({ name, content }))
@@ -228,9 +240,11 @@ function buildOpPayload(op: StagedOp): Pick<PlanOpPayload, "params" | "files"> {
 }
 
 /**
- * Nodes whose ISO panel is enabled but empty — deploying them would silently
- * fall back to the default server-rendered disc, the one thing the toggle
- * says won't happen. Deploy refuses until the panel has content or is off.
+ * Nodes whose ISO panel is in UPLOAD-ISO mode with nothing uploaded — deploying
+ * one would silently fall back to the server-rendered disc, the one thing that
+ * mode says won't happen. Deploy refuses until an ISO is attached or the mode
+ * changes. An empty PACK grid is *not* an error: those files only override the
+ * rendered set, so none of them simply means "render all of it".
  */
 function emptyIsoNodes(ops: StagedOp[]): string[] {
   const nodes = useTopologyStore.getState().nodes
@@ -240,8 +254,9 @@ function emptyIsoNodes(ops: StagedOp[]): string[] {
     const node = nodes.find((n) => n.id === op.targetNodeId)
     const iso = node?.data.isoAuthoring
     if (!iso?.enabled) continue
-    const empty = iso.mode === "pack" ? iso.files.length === 0 : !iso.isoId
-    if (empty) names.push(node?.data.name ?? op.targetNodeId)
+    if (iso.mode === "uploadIso" && !iso.isoId) {
+      names.push(node?.data.name ?? op.targetNodeId)
+    }
   }
   return names
 }
@@ -989,14 +1004,14 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
     // A list of nothing but retained `done` rows has nothing left to send.
     if (deploying || actionableOps(ops).length === 0) return
 
-    // Pre-flight: an enabled-but-empty ISO panel means the operator asked for
-    // an authored disc but hasn't provided one — refuse rather than silently
+    // Pre-flight: UPLOAD-ISO mode with nothing uploaded means the operator asked
+    // for a verbatim disc but hasn't provided one — refuse rather than silently
     // deploying the default config.
     const missingIso = emptyIsoNodes(ops)
     if (missingIso.length > 0) {
       toast.error(
         `"${missingIso[0]}"${missingIso.length > 1 ? ` (+${missingIso.length - 1} more)` : ""}: ` +
-          "the ISO panel is enabled but empty — add scripts, upload an ISO, or turn it off.",
+          "no ISO uploaded — upload one, switch to Pack files, or turn it off.",
       )
       return
     }
