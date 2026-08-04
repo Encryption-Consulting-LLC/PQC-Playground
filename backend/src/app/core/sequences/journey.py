@@ -45,8 +45,17 @@ def build_certificate_journey(
     cdp_ok, cdp_failure = _status(
         cert, "cdp", "CDP could not retrieve fresh base and delta CRLs."
     )
+    # The probe's missing OCSP response is a symptom; the responder's own HTTP
+    # status is the cause, and it is the difference between "look at the probe"
+    # and "look at the responder". Name it whenever the endpoint reported one.
+    responder_status = (results.get("ocsp-health") or {}).get("http_status")
     ocsp_ok, ocsp_failure = _status(
-        cert, "ocsp", "The responder did not return a verified OCSP status."
+        cert,
+        "ocsp",
+        f"The responder at http://{ctx.pki_host or web.hostname}/ocsp returned "
+        f"HTTP {responder_status}."
+        if isinstance(responder_status, int) and not 200 <= responder_status < 300
+        else "The responder did not return a verified OCSP status.",
     )
     chain_ok, chain_failure = _status(
         cert, "chain", "The issued probe certificate did not build to the trusted root."

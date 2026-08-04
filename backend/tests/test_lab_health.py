@@ -181,6 +181,35 @@ def test_cdp_is_unassertable_without_observed_names() -> None:
     assert "cdp" not in report["checks"]["enterprisePki"]["containers"]["detail"]
 
 
+def test_a_configured_responder_that_errors_still_fails_the_gate() -> None:
+    """`configured` proves the config exists, not that the responder can answer."""
+    results = deepcopy(_healthy_results())
+    results["ocsp-health"]["http_status"] = 500
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["healthy"] is False
+    assert "Online Responder" in "; ".join(report["failures"])
+    assert "HTTP 500" in "; ".join(report["failures"])
+    assert report["checks"]["ocspResponder"]["detail"]["httpStatus"] == 500
+
+
+def test_a_serving_responder_passes_the_gate() -> None:
+    results = deepcopy(_healthy_results())
+    results["ocsp-health"]["http_status"] = 200
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["healthy"] is True
+
+
+def test_an_agent_that_reports_no_endpoint_status_is_not_penalised() -> None:
+    report = aggregate_lab_health(_runtime(), _healthy_results())
+
+    assert report["checks"]["ocspResponder"]["ok"] is True
+    assert report["checks"]["ocspResponder"]["detail"]["httpStatus"] is None
+
+
 def test_wrong_runtime_identity_fails_the_gate() -> None:
     results = _healthy_results()
     results["identity-web"]["hostname"] = "unexpected-host"

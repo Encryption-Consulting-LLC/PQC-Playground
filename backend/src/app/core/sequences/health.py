@@ -199,12 +199,33 @@ def aggregate_lab_health(
             {"service": result.get("service"), "pingOk": result.get("ping_ok")},
         )
 
+    # A revocation configuration that reads back over COM proves only that the
+    # configuration exists, not that the responder can answer with it. A lab has
+    # shipped with `configured: true` alongside `http_status: 500` -- the responder
+    # had no signing certificate bound, so every request failed and the only
+    # symptom the gate reported was the downstream probe's missing OCSP response.
+    # Assert the endpoint too, and name the status: it is the actual fault.
     ocsp_result = results.get("ocsp-health", {})
+    pki_host = runtime.ctx.pki_host or runtime.ctx.node("web").hostname
+    ocsp_endpoint = f"http://{pki_host}/ocsp"
+    ocsp_configured = ocsp_result.get("configured") is True
+    responder_status = ocsp_result.get("http_status")
+    # An agent that predates the endpoint probe reports no status; assert only
+    # what was actually measured.
+    responder_serving = (
+        200 <= responder_status < 300 if isinstance(responder_status, int) else True
+    )
     responder = check(
         "responder",
-        ocsp_result.get("configured") is True,
-        "Online Responder configuration is missing or unreadable",
-        ocsp_result.get("configurations"),
+        ocsp_configured and responder_serving,
+        f"the Online Responder at {ocsp_endpoint} returned HTTP {responder_status}"
+        if ocsp_configured
+        else "Online Responder configuration is missing or unreadable",
+        {
+            "endpoint": ocsp_endpoint,
+            "httpStatus": responder_status,
+            "configurations": ocsp_result.get("configurations"),
+        },
     )
 
     dns = {}

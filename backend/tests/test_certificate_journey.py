@@ -4,7 +4,7 @@ from app.core.sequences.journey import build_certificate_journey
 from app.core.sequences.model import NodeContext, RunContext
 
 
-def test_certificate_journey_projects_urls_dns_artifacts_and_failures() -> None:
+def _ctx() -> RunContext:
     web = NodeContext("srv1", "srv1", "SRV1", ip="10.0.0.14")
     ca = NodeContext(
         "ca02",
@@ -13,7 +13,7 @@ def test_certificate_journey_projects_urls_dns_artifacts_and_failures() -> None:
         ip="10.0.0.13",
         template_config={"commonName": "EC Issuing CA"},
     )
-    ctx = RunContext(
+    return RunContext(
         nodes={"web": web, "ca": ca},
         domain_name="encon.pki",
         pki_host="pki.encon.pki",
@@ -25,6 +25,10 @@ def test_certificate_journey_projects_urls_dns_artifacts_and_failures() -> None:
             "issuing_delta_crl_filename": "issuing+.crl",
         },
     )
+
+
+def test_certificate_journey_projects_urls_dns_artifacts_and_failures() -> None:
+    ctx = _ctx()
     results = {
         "certificate-health": {
             "chain": {"ok": True},
@@ -55,3 +59,30 @@ def test_certificate_journey_projects_urls_dns_artifacts_and_failures() -> None:
     assert journey["hops"][3]["failureReason"]
     assert journey["hops"][4]["url"] == "http://pki.encon.pki/ocsp"
     assert journey["signatureAlgorithm"] == "2.16.840.1.101.3.4.3.19"
+
+
+def test_the_ocsp_hop_names_the_responder_status_behind_the_symptom() -> None:
+    """A missing OCSP response is the symptom; the endpoint's 500 is the cause."""
+    results = {
+        "certificate-health": {"chain": {"ok": True}, "ocsp": {"ok": False}},
+        "ocsp-health": {"configured": True, "http_status": 500},
+    }
+
+    journey = build_certificate_journey(_ctx(), results)
+
+    assert journey["hops"][4]["failureReason"] == (
+        "The responder at http://pki.encon.pki/ocsp returned HTTP 500."
+    )
+
+
+def test_the_ocsp_hop_falls_back_when_the_endpoint_answered_normally() -> None:
+    results = {
+        "certificate-health": {"chain": {"ok": True}, "ocsp": {"ok": False}},
+        "ocsp-health": {"configured": True, "http_status": 200},
+    }
+
+    journey = build_certificate_journey(_ctx(), results)
+
+    assert journey["hops"][4]["failureReason"] == (
+        "The responder did not return a verified OCSP status."
+    )
