@@ -1,11 +1,20 @@
 """Pure aggregation for the terminal two-tier PKI deployment health gate."""
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 from app.core.sequences.model import StepRuntime
 
 ML_DSA_87_SIGNATURE_OID = "2.16.840.1.101.3.4.3.19"
+
+# Containers `pki.verify` reports as plain booleans and gets right. `cdp` is
+# deliberately absent: it is re-derived below from the observed names.
+_AGENT_CONTAINERS = (
+    "nt_auth",
+    "aia",
+    "certification_authorities",
+    "enrollment_services",
+)
 
 
 def _nested(result: Mapping[str, Any], *path: str) -> Any:
@@ -15,6 +24,46 @@ def _nested(result: Mapping[str, Any], *path: str) -> Any:
             return None
         value = value.get(key)
     return value
+
+
+def _names(value: Any) -> list[str]:
+    """Normalize an ``observed`` container listing to casefolded names.
+
+    PowerShell collapses a one-element array to a bare scalar, so a container
+    holding a single object arrives as ``"EC-Root-CA"`` where two arrive as a
+    list. Both have to compare equal to the same expectation.
+    """
+    if value is None:
+        return []
+    if isinstance(value, str):
+        return [value.casefold()]
+    if isinstance(value, Sequence):
+        return [str(item).casefold() for item in value]
+    return [str(value).casefold()]
+
+
+def _cdp_container_ok(runtime: StepRuntime, observed: Mapping[str, Any]) -> bool | None:
+    """Whether both CAs published a CRL under ``CN=CDP``, or None if unknowable.
+
+    ``pki.verify`` answers this by comparing ``CN=CDP``'s one-level children
+    against the two CA *common* names, which can never hold: the CDP publication
+    URL nests a level deeper than AIA's (``CN=%7%8,CN=%2,CN=CDP`` against
+    ``CN=%7,CN=AIA``), so those children are the CA hosts' short names and the
+    common names belong to the ``cRLDistributionPoint`` leaves inside them. The
+    comparison only works here, where the expected hostnames are known.
+
+    A pre-``observed`` agent leaves it unassertable rather than falling back to
+    that boolean -- reporting a container as broken on every lab ever built is
+    worse than not reporting it, and ``certificate.cdp`` independently proves the
+    CRLs are fetchable and fresh.
+    """
+    if "cdp" not in observed:
+        return None
+    published = _names(observed.get("cdp"))
+    return all(
+        runtime.ctx.node(alias).hostname.casefold() in published
+        for alias in ("root", "ca")
+    )
 
 
 def aggregate_lab_health(
@@ -84,20 +133,21 @@ def aggregate_lab_health(
     }
 
     enterprise = results.get("enterprise-pki-health", {})
-    containers = enterprise.get("containers", {})
-    required_containers = (
-        "nt_auth",
-        "aia",
-        "cdp",
-        "certification_authorities",
-        "enrollment_services",
-    )
+    observed = enterprise.get("observed") or {}
+    containers = dict(enterprise.get("containers") or {})
+    asserted = list(_AGENT_CONTAINERS)
+    cdp_container = _cdp_container_ok(runtime, observed)
+    if cdp_container is None:
+        containers.pop("cdp", None)
+    else:
+        containers["cdp"] = cdp_container
+        asserted.append("cdp")
     enterprise_pki = {
         "containers": check(
             "containers",
-            all(containers.get(name) is True for name in required_containers),
+            all(containers.get(name) is True for name in asserted),
             "one or more AD enterprise PKI containers are unhealthy",
-            containers,
+            {**containers, "observed": observed} if observed else containers,
         ),
         "templates": check(
             "templates",

@@ -48,9 +48,18 @@ def _healthy_results() -> dict[str, dict]:
             "containers": {
                 "nt_auth": True,
                 "aia": True,
-                "cdp": True,
+                # Always false in the wild: the agent compares CA common names
+                # against `CN=CDP`'s host-named children. The aggregate ignores it
+                # and re-derives the answer from `observed`.
+                "cdp": False,
                 "certification_authorities": True,
                 "enrollment_services": True,
+            },
+            "observed": {
+                "aia": ["EC-Issuing-CA", "EC-Root-CA"],
+                "cdp": ["guest-lab-root", "guest-lab-ca"],
+                "certification_authorities": "EC-Root-CA",
+                "enrollment_services": "EC-Issuing-CA",
             },
             "templates": {"ok": True},
             "http_artifacts": {"ok": True},
@@ -112,6 +121,48 @@ def test_missing_enterprise_container_fails_with_diagnostic() -> None:
 
     assert report["healthy"] is False
     assert "AD enterprise PKI containers" in "; ".join(report["failures"])
+
+
+def test_cdp_container_is_read_from_the_host_names_it_publishes_under() -> None:
+    """The agent's own `cdp` boolean is always false and must not be consumed."""
+    report = aggregate_lab_health(_runtime(), _healthy_results())
+
+    containers = report["checks"]["enterprisePki"]["containers"]
+    assert containers["ok"] is True
+    assert containers["detail"]["cdp"] is True
+
+
+def test_a_single_published_cdp_host_arrives_as_a_bare_string() -> None:
+    """PowerShell collapses a one-element array; both CAs may be one host."""
+    results = _healthy_results()
+    results["enterprise-pki-health"]["observed"]["cdp"] = "guest-lab-root"
+    runtime = _runtime()
+    runtime.ctx.nodes["ca"] = runtime.ctx.nodes["root"]
+
+    report = aggregate_lab_health(runtime, results)
+
+    assert report["checks"]["enterprisePki"]["containers"]["ok"] is True
+
+
+def test_a_ca_that_published_no_crl_fails_the_container_check() -> None:
+    results = _healthy_results()
+    results["enterprise-pki-health"]["observed"]["cdp"] = ["guest-lab-root"]
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["healthy"] is False
+    assert "AD enterprise PKI containers" in "; ".join(report["failures"])
+
+
+def test_cdp_is_unassertable_without_observed_names() -> None:
+    """A pre-`observed` agent must not fail a lab over a check it cannot answer."""
+    results = _healthy_results()
+    del results["enterprise-pki-health"]["observed"]
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["healthy"] is True
+    assert "cdp" not in report["checks"]["enterprisePki"]["containers"]["detail"]
 
 
 def test_wrong_runtime_identity_fails_the_gate() -> None:
