@@ -156,8 +156,10 @@ interface StagingState {
   planPhase: PlanPhase | null
   /** Worker setup breadcrumb (`planSetup` progress frames) shown verbatim during `preparing`. */
   planPhaseDetail: string | null
-  /** Epoch ms the run started, for the elapsed-time escalation in the panel — the Deploy click locally, the run document's `createdAt` on a resumed job (`rehydrateRunFacts`). */
+  /** Epoch ms the run started, for the elapsed-time escalation in the panel — the Deploy click locally, the run document's `createdAt` on a resumed job (`rehydrateRunFacts`). Outlives the run so the total can be reported. */
   deployStartedAt: number | null
+  /** Epoch ms the run reached a terminal state; null while one is in flight or idle. Paired with `deployStartedAt` it is the run's total duration, which used to vanish the instant it became interesting. */
+  deployFinishedAt: number | null
   /** What the last deploy attempt verified (202) or tripped over (409) — rendered as the receipt checklist. Survives both the plan and a reload, so the wait it explains reads as deliberate. */
   preflightReceipt: DeployPreflightReceipt | null
 
@@ -637,7 +639,10 @@ function revertNonTerminalToStaged(): void {
     deploying: false,
     planPhase: null,
     planPhaseDetail: null,
+    // Every op reverted to `staged`, so there is no run left for a total to
+    // describe — unlike `finishDeploy`, which keeps one.
     deployStartedAt: null,
+    deployFinishedAt: null,
   })
 }
 
@@ -708,7 +713,10 @@ export function finishDeploy(
     deploying: false,
     planPhase: null,
     planPhaseDetail: null,
-    deployStartedAt: null,
+    // `deployStartedAt` deliberately survives: clearing it here is what made a
+    // finished run report no duration at all, since the live clock unmounts with
+    // `deploying` and nothing else had ever recorded how long the run took.
+    deployFinishedAt: Date.now(),
   })
 
   if (errorCount > 0) {
@@ -855,6 +863,7 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
   planPhase: null,
   planPhaseDetail: null,
   deployStartedAt: null,
+  deployFinishedAt: null,
   preflightReceipt: null,
 
   stageOp(input) {
@@ -969,6 +978,7 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
       planPhase: null,
       planPhaseDetail: null,
       deployStartedAt: null,
+      deployFinishedAt: null,
       preflightReceipt: null,
     })
     get().resumePlanJob()
@@ -1000,6 +1010,7 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
       planPhase: "posting",
       planPhaseDetail: null,
       deployStartedAt: Date.now(),
+      deployFinishedAt: null,
       preflightReceipt: null,
     })
 
@@ -1069,6 +1080,7 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
           planPhase: null,
           planPhaseDetail: null,
           deployStartedAt: null,
+          deployFinishedAt: null,
           preflightReceipt: extractPreflightReceipt(err),
         }))
         toast.error(

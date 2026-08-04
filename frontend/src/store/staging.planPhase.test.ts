@@ -185,13 +185,14 @@ test("deploy walks posting → queued → preparing → executing off the job st
   expect(state().planPhase).toBe("executing")
 })
 
-test("finishDeploy resets the phase fields but keeps the receipt", () => {
+test("finishDeploy resets the phase fields but keeps the receipt and the clock", () => {
   staging.useStagingStore.setState({
     deploying: true,
     deployJobId: "job9",
     planPhase: "executing",
     planPhaseDetail: null,
     deployStartedAt: 111,
+    deployFinishedAt: null,
     preflightReceipt: { ready: true, checks: [] },
   })
 
@@ -202,8 +203,11 @@ test("finishDeploy resets the phase fields but keeps the receipt", () => {
 
   expect(state().deploying).toBe(false)
   expect(state().planPhase).toBeNull()
-  expect(state().deployStartedAt).toBeNull()
   expect(state().preflightReceipt?.ready).toBe(true)
+  // Both timestamps survive the run: the panel reports the total after the live
+  // clock unmounts, which it cannot do if the start time is cleared here.
+  expect(state().deployStartedAt).toBe(111)
+  expect(state().deployFinishedAt).toBeGreaterThan(111)
 })
 
 test("a structured 409 captures the failed preflight as the receipt", async () => {

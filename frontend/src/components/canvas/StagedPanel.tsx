@@ -7,6 +7,7 @@ import {
   CheckCircle2,
   ChevronRight,
   Circle,
+  Clock,
   Cog,
   Globe,
   Loader2,
@@ -248,6 +249,7 @@ export function StagedPanel() {
   const planPhase = useStagingStore((s) => s.planPhase)
   const planPhaseDetail = useStagingStore((s) => s.planPhaseDetail)
   const deployStartedAt = useStagingStore((s) => s.deployStartedAt)
+  const deployFinishedAt = useStagingStore((s) => s.deployFinishedAt)
   const undo = useStagingStore((s) => s.undo)
   const removeOpCascade = useStagingStore((s) => s.removeOpCascade)
   const deploy = useStagingStore((s) => s.deploy)
@@ -277,6 +279,12 @@ export function StagedPanel() {
   const elapsedSec = ticking
     ? Math.max(0, Math.floor((nowMs - (deployStartedAt ?? nowMs)) / 1000))
     : 0
+  // How long the last finished run took, kept on the panel after the live clock
+  // unmounts. `finishDeploy` retains both timestamps for exactly this.
+  const totalSec =
+    deployStartedAt !== null && deployFinishedAt !== null
+      ? Math.max(0, Math.floor((deployFinishedAt - deployStartedAt) / 1000))
+      : null
 
   // The backend owns sequence expansion. Keep its tree warm while the user
   // stages a valid topology, but never surface expected incomplete-topology
@@ -545,6 +553,19 @@ export function StagedPanel() {
           doneCount={doneCount}
           opCount={ops.length}
         />
+      )}
+
+      {/* The run's total, once it has one. Gated on `!deploying` so this and the
+          live clock inside `DeploymentProgress` are never both on screen — the
+          live one counts up, this one is the answer. */}
+      {!deploying && totalSec !== null && (
+        <div className="flex items-center justify-between border-t px-2 py-1.5 text-[10px] text-muted-foreground">
+          <span className="flex items-center gap-1.5">
+            <Clock className="h-3 w-3" aria-hidden="true" />
+            Total time
+          </span>
+          <span className="tabular-nums">{formatElapsed(totalSec)}</span>
+        </div>
       )}
 
       <div className="mt-auto flex flex-col gap-1.5 border-t p-2">
