@@ -11,10 +11,12 @@ import { Splash } from "@/components/Splash"
 import { ThemeToggle } from "@/components/ThemeToggle"
 import { Workspace } from "@/components/canvas/Workspace"
 import { ProjectShareLinkHandler } from "@/components/canvas/ProjectShareLinkHandler"
+import { LabJoinLinkHandler } from "@/components/canvas/LabJoinLinkHandler"
 import { useApplyTheme } from "@/hooks/useTheme"
 import { useBeforeUnloadWarning } from "@/hooks/useBeforeUnloadWarning"
 import { useMe } from "@/hooks/useMe"
 import { initProjectAutosave } from "@/lib/projectAutosave"
+import { restoreJoinedLabs } from "@/lib/labs"
 import {
   initLocalProjects,
   initServerProjects,
@@ -67,8 +69,14 @@ function App() {
     if (initializedSession.current === sessionMode) return
     initializedSession.current = sessionMode
     initProjectAutosave()
-    if (canProjects) void initServerProjects(me.username)
-    else void initLocalProjects(me.username)
+    // Joined labs are restored after the account's own projects, and only
+    // once: they are nobody's own project, so neither the server project list
+    // nor browser storage carries them, and the membership record is all there
+    // is to rebuild the tabs from.
+    const init = canProjects
+      ? initServerProjects(me.username)
+      : initLocalProjects(me.username)
+    void init.then(() => restoreJoinedLabs())
   }, [sessionReady, token, me, canProjects])
 
   if (!token) return <LoginForm />
@@ -148,6 +156,7 @@ function App() {
 
       {/* Canvas workspace — takes the remaining viewport height */}
       {isGuest && <ProjectShareLinkHandler />}
+      <LabJoinLinkHandler />
       <Workspace />
     </div>
   )

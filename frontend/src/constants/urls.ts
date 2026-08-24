@@ -58,6 +58,13 @@ export const URLS = {
     list: "/projects",
     one: (id: string) => `/projects/${encodeURIComponent(id)}`,
   },
+  // Pre-deployed labs. `join` redeems an admin-issued code; `list` is what
+  // rebuilds the joined tabs after a reload, since a joined lab is nobody's
+  // own project and so lives in neither /projects nor browser storage.
+  labs: {
+    list: "/labs",
+    join: "/labs/join",
+  },
   projectShares: {
     one: (id: string) => `/project-shares/${encodeURIComponent(id)}`,
     accept: (id: string) => `/project-shares/${encodeURIComponent(id)}/accept`,

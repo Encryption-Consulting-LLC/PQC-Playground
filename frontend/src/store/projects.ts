@@ -54,6 +54,17 @@ export interface Project {
    * stored, which is never part of the project itself.
    */
   collaborative?: boolean
+  /**
+   * Present when this project came from an admin-issued join code — a lab
+   * somebody else deployed, handed over to look at. Client-only and absent from
+   * `serializeProject` for the same reason as `collaborative`: it says where the
+   * project came from, never what it contains.
+   *
+   * It is also the read-only marker (`useJoinedLab`). A joined lab is view +
+   * remote desktop: the backend already refuses every build action on its VMs,
+   * and this is what stops the canvas from offering them.
+   */
+  joinedLab?: { code: string; owner: string | null }
   updatedAt: number
 }
 
@@ -170,6 +181,20 @@ interface ProjectsState {
     project: Project,
     opts?: { collaborative?: boolean },
   ) => void
+  /**
+   * Adds/replaces a lab joined with a code and (by default) opens it.
+   * Always `collaborative` — the id belongs to whoever deployed the lab, so it
+   * must stay out of this account's project sync — plus `joinedLab`, which is
+   * what puts the canvas in view-only mode.
+   *
+   * `activate: false` is for session restore, which reattaches every joined lab
+   * as a tab without stealing the project the user was last on.
+   */
+  openJoinedLab: (
+    project: Project,
+    lab: { code: string; owner: string | null },
+    opts?: { activate?: boolean },
+  ) => void
   renameProject: (id: string, name: string) => void
   switchProject: (id: string) => void
   /**
@@ -271,6 +296,26 @@ export const useProjectsStore = create<ProjectsState>()(
           activeProjectId: project.id,
         }))
         activate(project)
+      },
+
+      openJoinedLab(incoming, lab, opts) {
+        const activate_ = opts?.activate !== false
+        if (activate_) get().persistActiveDraft()
+        const project: Project = {
+          ...incoming,
+          collaborative: true,
+          joinedLab: lab,
+          dirty: false,
+        }
+        set((s) => ({
+          projects: s.projects.some((candidate) => candidate.id === project.id)
+            ? s.projects.map((candidate) =>
+                candidate.id === project.id ? project : candidate,
+              )
+            : [...s.projects, project],
+          activeProjectId: activate_ ? project.id : s.activeProjectId,
+        }))
+        if (activate_) activate(project)
       },
 
       renameProject(id, name) {

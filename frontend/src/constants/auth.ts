@@ -35,6 +35,10 @@ export const CAPABILITIES = {
   // to the caller's own VMs. Admins hold the separate vm:console-admin instead
   // and use the /admin console, which this app never renders.
   vmConsole: "vm:console",
+  // Redeem an admin-issued join code for a pre-deployed lab. Held by guests
+  // and operators; the issuing side (lab:admin) is admin-only and lives in the
+  // /admin console, which this app never renders.
+  labJoin: "lab:join",
   deploy: "deploy",
   // Held by every canvas role; the backend scopes each project to its owner,
   // so these gate whether an account has saved projects, never whose.

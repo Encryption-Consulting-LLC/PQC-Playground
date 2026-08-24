@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react"
-import { Plus, Save, X } from "lucide-react"
+import { KeyRound, Plus, Save, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
@@ -8,8 +8,11 @@ import { useProjectsStore } from "@/store/projects"
 import { useStagingStore } from "@/store/staging"
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog"
 import { ProjectShareControl } from "./ProjectShareControl"
+import { LabJoinDialog } from "./LabJoinDialog"
+import { useCan } from "@/hooks/useCan"
+import { useJoinedLab } from "@/hooks/useJoinedLab"
 import { useAuthStore } from "@/store/auth"
-import { ROLES } from "@/constants"
+import { CAPABILITIES, ROLES } from "@/constants"
 
 export function ProjectTabBar() {
   const projects = useProjectsStore((s) => s.projects)
@@ -21,15 +24,21 @@ export function ProjectTabBar() {
   const saveActiveSnapshot = useProjectsStore((s) => s.saveActiveSnapshot)
   const deploying = useStagingStore((s) => s.deploying)
   const isGuest = useAuthStore((s) => s.role === ROLES.guest)
+  const canJoinLab = useCan(CAPABILITIES.labJoin)
+  // Sharing publishes the *active* project, so it has no meaning on a lab whose
+  // snapshot belongs to whoever deployed it.
+  const joinedLab = useJoinedLab()
   const isActiveDirty =
     projects.find((p) => p.id === activeProjectId)?.dirty ?? false
 
+  const [joinOpen, setJoinOpen] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [draftName, setDraftName] = useState("")
   // Project pending deletion — drives the confirm dialog.
   const [pendingDelete, setPendingDelete] = useState<{
     id: string
     name: string
+    joinedLab: boolean
   } | null>(null)
 
   useEffect(() => {
@@ -98,6 +107,14 @@ export function ProjectTabBar() {
               className="h-full rounded-[inherit] pl-2.5 pr-1.5 text-xs font-medium whitespace-nowrap outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
             >
               {project.name}
+              {project.joinedLab && (
+                <span
+                  className="ml-1 rounded-sm bg-emerald-500/15 px-1 text-[10px] font-semibold text-emerald-600 dark:text-emerald-400"
+                  title="Joined lab — view and remote desktop only"
+                >
+                  LAB
+                </span>
+              )}
               {project.dirty && (
                 <span
                   className="ml-1 text-muted-foreground"
@@ -111,10 +128,18 @@ export function ProjectTabBar() {
               type="button"
               disabled={deploying}
               onClick={() =>
-                setPendingDelete({ id: project.id, name: project.name })
+                setPendingDelete({
+                  id: project.id,
+                  name: project.name,
+                  joinedLab: !!project.joinedLab,
+                })
               }
-              aria-label={`Delete ${project.name}`}
-              title="Delete project"
+              aria-label={
+                project.joinedLab
+                  ? `Close ${project.name}`
+                  : `Delete ${project.name}`
+              }
+              title={project.joinedLab ? "Close lab" : "Delete project"}
               className={cn(
                 "flex h-4 w-4 items-center justify-center rounded-sm outline-none transition-colors",
                 "opacity-0 focus-visible:opacity-100 group-hover:opacity-100",
@@ -138,11 +163,23 @@ export function ProjectTabBar() {
         <Plus />
       </Button>
 
+      {canJoinLab && (
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          onClick={() => setJoinOpen(true)}
+          aria-label="Join a lab"
+          title="Join a lab with a code"
+        >
+          <KeyRound />
+        </Button>
+      )}
+
       <Button
         variant="ghost"
         size="icon-sm"
         className="ml-auto"
-        disabled={!isActiveDirty}
+        disabled={!isActiveDirty || !!joinedLab}
         onClick={() => saveActiveSnapshot()}
         aria-label="Save project (Ctrl+S)"
         title="Save project (Ctrl+S)"
@@ -150,10 +187,13 @@ export function ProjectTabBar() {
         <Save />
       </Button>
 
-      {isGuest && <ProjectShareControl />}
+      {isGuest && !joinedLab && <ProjectShareControl />}
+
+      <LabJoinDialog open={joinOpen} onOpenChange={setJoinOpen} />
 
       <ProjectDeleteDialog
         projectName={pendingDelete?.name ?? null}
+        joinedLab={pendingDelete?.joinedLab ?? false}
         onConfirm={confirmDelete}
         onCancel={() => setPendingDelete(null)}
       />

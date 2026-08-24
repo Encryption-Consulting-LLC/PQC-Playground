@@ -4,6 +4,7 @@ import { TEMPLATE_CATALOG } from "@/constants/templates"
 import { actionableOps } from "@/lib/staging"
 import { cn } from "@/lib/utils"
 import { useStagingStore } from "@/store/staging"
+import { useIsJoinedLab } from "@/hooks/useJoinedLab"
 import { StagedPanel } from "./StagedPanel"
 
 const DRAG_TYPE = "application/reactflow"
@@ -23,6 +24,11 @@ export function Toolbox() {
   // for context, and those aren't staged for anything any more.
   const opsCount = useStagingStore((s) => actionableOps(s.ops).length)
   const deploying = useStagingStore((s) => s.deploying)
+  // A joined lab is finished: there is nothing to add to it, so the palette is
+  // inert for the same reason it is mid-deploy. Kept visible rather than hidden
+  // — the templates are what the lab is made of, and reading them is useful.
+  const joinedLab = useIsJoinedLab()
+  const locked = deploying || joinedLab
 
   return (
     <aside
@@ -67,7 +73,7 @@ export function Toolbox() {
               return (
                 <div
                   key={def.id}
-                  draggable={!deploying}
+                  draggable={!locked}
                   onDragStart={(e) => {
                     e.dataTransfer.setData(DRAG_TYPE, def.id)
                     e.dataTransfer.effectAllowed = "copy"
@@ -76,7 +82,7 @@ export function Toolbox() {
                     "flex flex-col items-center justify-center gap-2",
                     "rounded-lg border bg-card px-2 py-3",
                     "shadow-sm transition-colors select-none",
-                    deploying
+                    locked
                       ? "cursor-not-allowed opacity-50"
                       : "cursor-grab hover:bg-accent hover:text-accent-foreground active:cursor-grabbing",
                   )}
@@ -99,7 +105,7 @@ export function Toolbox() {
               return (
                 <div
                   key={product.id}
-                  draggable={!deploying}
+                  draggable={!locked}
                   onDragStart={(e) => {
                     e.dataTransfer.setData(DRAG_TYPE, product.id)
                     e.dataTransfer.effectAllowed = "copy"
@@ -107,7 +113,7 @@ export function Toolbox() {
                   title={`${product.description} · clones ${product.cloneBase}`}
                   className={cn(
                     "flex flex-col items-center justify-center gap-2 rounded-lg border bg-card px-2 py-3 shadow-sm select-none transition-colors",
-                    deploying
+                    locked
                       ? "cursor-not-allowed opacity-50"
                       : "cursor-grab hover:bg-accent hover:text-accent-foreground active:cursor-grabbing",
                   )}
@@ -131,7 +137,9 @@ export function Toolbox() {
           </div>
 
           <p className="mt-3 px-1 text-[10px] text-muted-foreground leading-snug">
-            Drag a component onto the canvas to add it.
+            {joinedLab
+              ? "This lab was deployed for you — open a machine's desktop from the inspector. Create your own project to build a topology."
+              : "Drag a component onto the canvas to add it."}
           </p>
         </div>
       ) : (

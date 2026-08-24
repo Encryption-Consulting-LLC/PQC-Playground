@@ -29,6 +29,7 @@ import {
   type DomainSyncChange,
 } from "@/store/topology"
 import { opsReferencingNode, useStagingStore } from "@/store/staging"
+import { useIsJoinedLab } from "@/hooks/useJoinedLab"
 import { OP_KIND, actionableOps, type StagedOp } from "@/lib/staging"
 import { EDGE_TYPE } from "@/constants/topology"
 import {
@@ -78,6 +79,12 @@ export function Canvas() {
   const edges = useTopologyStore((s) => s.edges)
   const selectedNodeId = useTopologyStore((s) => s.selectedNodeId)
   const deploying = useStagingStore((s) => s.deploying)
+  // A lab joined with a code is somebody else's finished environment: it is
+  // there to be explored and connected to, never edited. The lock rides
+  // alongside `deploying` at every site rather than in a new mechanism, so a
+  // gesture that is impossible mid-deploy is impossible here too.
+  const joinedLab = useIsJoinedLab()
+  const readOnly = deploying || joinedLab
   // Select individual action refs (stable across renders) rather than the
   // whole store, so the callbacks below aren't recreated on every state
   // change — recreating onSelectionChange feeds a React Flow update loop.
@@ -187,7 +194,7 @@ export function Canvas() {
 
   const requestNodeDelete = useCallback(
     (nodeId: string) => {
-      if (deploying || evidenceActive) return
+      if (readOnly || evidenceActive) return
       const target = nodes.find((n) => n.id === nodeId)
       if (!target) return
       const affected = opsReferencingNode(
@@ -205,7 +212,7 @@ export function Canvas() {
       }
       setPendingNodeDelete({ nodeId, ops: affected, hostNote: deployed })
     },
-    [nodes, deploying, evidenceActive, removeNode],
+    [nodes, readOnly, evidenceActive, removeNode],
   )
 
   const confirmNodeDelete = useCallback(() => {
@@ -676,7 +683,7 @@ export function Canvas() {
   const onDrop = useCallback(
     (e: React.DragEvent) => {
       e.preventDefault()
-      if (deploying || evidenceActive) return
+      if (readOnly || evidenceActive) return
       const typeId = e.dataTransfer.getData(DRAG_TYPE)
       if (!typeId) return
 
@@ -710,7 +717,7 @@ export function Canvas() {
       }
       addNode(typeId, position)
     },
-    [screenToFlowPosition, addNode, deploying, evidenceActive, nodes, edges],
+    [screenToFlowPosition, addNode, readOnly, evidenceActive, nodes, edges],
   )
 
   return (
@@ -739,8 +746,8 @@ export function Canvas() {
         defaultViewport={initialViewport}
         colorMode={resolvedTheme}
         proOptions={{ hideAttribution: true }}
-        nodesDraggable={!deploying && !evidenceActive}
-        nodesConnectable={!deploying && !evidenceActive}
+        nodesDraggable={!readOnly && !evidenceActive}
+        nodesConnectable={!readOnly && !evidenceActive}
         elementsSelectable={!deploying && !evidenceActive}
       >
         <DomainRegions preview={domainDragPreview} />
@@ -815,13 +822,22 @@ export function Canvas() {
         onConfirm={confirmNodeDelete}
         onCancel={() => setPendingNodeDelete(null)}
       />
-      {deploying && (
+      {deploying ? (
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
           <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" />
             Deploying — canvas locked
           </div>
         </div>
+      ) : (
+        joinedLab && (
+          <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
+            <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm">
+              <span className="h-1.5 w-1.5 rounded-full bg-emerald-500" />
+              Joined lab — select a machine to open its desktop
+            </div>
+          </div>
+        )
       )}
     </div>
   )

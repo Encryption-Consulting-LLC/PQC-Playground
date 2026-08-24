@@ -1004,6 +1004,22 @@ export const useStagingStore = create<StagingState>()((set, get) => ({
     // A list of nothing but retained `done` rows has nothing left to send.
     if (deploying || actionableOps(ops).length === 0) return
 
+    // A lab joined with a code is somebody else's finished environment: the
+    // canvas is locked and nothing can be staged into it, so this is belt and
+    // braces for a stale op list surviving a tab switch. The backend refuses
+    // the same deploy (403) — this only keeps the client from asking.
+    const active = useProjectsStore
+      .getState()
+      .projects.find(
+        (p) => p.id === useProjectsStore.getState().activeProjectId,
+      )
+    if (active?.joinedLab) {
+      toast.error(
+        "This lab was deployed for you to explore. Create your own project to deploy a topology.",
+      )
+      return
+    }
+
     // Pre-flight: UPLOAD-ISO mode with nothing uploaded means the operator asked
     // for a verbatim disc but hasn't provided one — refuse rather than silently
     // deploying the default config.

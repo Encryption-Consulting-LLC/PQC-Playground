@@ -773,6 +773,37 @@ export const updateProject = (doc: ProjectPayload, init?: RequestInit) =>
 export const deleteProject = (id: string) =>
   request<string>(URLS.projects.one(id), { method: "DELETE" }, true)
 
+// --- /labs -------------------------------------------------------------------
+
+/**
+ * A lab joined with a code: the invite's identity plus the topology itself.
+ *
+ * The snapshot is somebody else's project, already stripped server-side of the
+ * run state that belongs to whoever deployed it (job ids, staged ops) — see
+ * `core/labs.lab_snapshot`. Opening it is `openJoinedLab`, never the normal
+ * project path, because it must not sync into this account's own projects.
+ */
+export interface JoinedLab {
+  code: string
+  displayCode: string
+  projectId: string
+  owner: string | null
+  label: string | null
+  name: string
+  project: ProjectDoc
+}
+
+/** Redeem a join code. 404 unknown, 410 revoked, 422 malformed. */
+export const joinLab = (code: string) =>
+  request<JoinedLab>(URLS.labs.join, {
+    method: "POST",
+    body: JSON.stringify({ code }),
+  })
+
+/** Every lab this account has joined, with current snapshots. */
+export const listJoinedLabs = () =>
+  request<{ labs: JoinedLab[]; count: number }>(URLS.labs.list)
+
 // --- /project-shares --------------------------------------------------------
 
 export interface ProjectShareMetadata {

@@ -1,27 +1,29 @@
+import { useState } from "react"
 import { CloudCog, FilePlus2, Network } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { ROLES } from "@/constants"
-import { useAuthStore } from "@/store/auth"
+import { CAPABILITIES } from "@/constants"
+import { useCan } from "@/hooks/useCan"
 import { useProjectsStore } from "@/store/projects"
+import { LabJoinDialog } from "./LabJoinDialog"
 
 /**
  * Shown by the Workspace when there are no projects (i.e. the last one was
  * deleted). Offers the two ways to start a new project — a clean workspace or
- * the pre-configured PKI lab template.
+ * the pre-configured PKI lab template — plus joining a lab that is already
+ * deployed, which is the one path that builds nothing.
  */
 export function ProjectLanding() {
   const addProject = useProjectsStore((s) => s.addProject)
   const addProjectFromTemplate = useProjectsStore(
     (s) => s.addProjectFromTemplate,
   )
-  const isGuest = useAuthStore((s) => s.role === ROLES.guest)
-  // Deployments normally point this at a share URL published by the guest
-  // account that owns the ready-made lab. The stable fallback is useful for
-  // environments that seed that conventional share id directly in Mongo.
-  const predeployedPkiLink =
-    import.meta.env.VITE_PREDEPLOYED_PKI_LINK?.trim() ||
-    "/?share=predeployed-pki"
+  // Which lab a visitor lands in is decided by the code they were given, not
+  // by a build-time URL: one deployment now serves as many pre-built labs as
+  // there are cohorts. Gated on the capability rather than the role, since
+  // operators hold it too (it is how they see what a cohort sees).
+  const canJoinLab = useCan(CAPABILITIES.labJoin)
+  const [joinOpen, setJoinOpen] = useState(false)
 
   return (
     <div className="login-bg flex flex-1 items-center justify-center overflow-y-auto p-6">
@@ -38,7 +40,7 @@ export function ProjectLanding() {
         <div
           className={cn(
             "grid w-full grid-cols-1 gap-4",
-            isGuest ? "sm:grid-cols-3" : "sm:grid-cols-2",
+            canJoinLab ? "sm:grid-cols-3" : "sm:grid-cols-2",
           )}
         >
           <StartCard
@@ -55,17 +57,19 @@ export function ProjectLanding() {
             subtitle="Pre-configured PKI"
             onClick={() => addProjectFromTemplate()}
           />
-          {isGuest && (
+          {canJoinLab && (
             <StartCard
               icon={CloudCog}
               accent="text-emerald-500"
-              title="Predeployed PKI"
-              subtitle="Join a ready-to-use lab"
-              onClick={() => window.location.assign(predeployedPkiLink)}
+              title="Join a Lab"
+              subtitle="Enter your joining code"
+              onClick={() => setJoinOpen(true)}
             />
           )}
         </div>
       </div>
+
+      <LabJoinDialog open={joinOpen} onOpenChange={setJoinOpen} />
     </div>
   )
 }
