@@ -1,7 +1,13 @@
-"""WebSocket routes for streaming background-job progress.
+"""WebSocket routes: background-job progress, and remote-desktop sessions.
 
-Generic: any job published via ``app.core.jobs.transport`` can be watched here, not
-just clones. Mounted under ``/api`` → ``ws /api/ws/jobs/{job_id}``.
+Job progress is generic — any job published via ``app.core.jobs.transport`` can be
+watched here, not just clones. Mounted under ``/api`` → ``ws /api/ws/jobs/{job_id}``.
+
+The console socket (``ws /api/ws/console/{ticket_id}``) shares this module for its
+conventions rather than its mechanics: same ``?token=`` auth, same
+``accept()``-before-``close()`` rejection discipline, same 4401/4403/4404 close
+codes. What it carries is not job messages but the Guacamole protocol, relayed
+byte-for-byte to guacd (see ``core.console``).
 
 Auth: browsers can't set custom headers on the WS upgrade, so the session token
 (a backend-minted JWT) comes as a ``?token=`` query param and is resolved by the
@@ -26,13 +32,17 @@ what lets a tab reopened hours later still learn how the deploy ended.
 
 import json
 
-from fastapi import APIRouter, WebSocket, WebSocketDisconnect
+from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from app.core.authz import Role, resolve_user_token
+from app.core.authz import Role, enforce_guest_vm_ownership, resolve_user_token
+from app.core.console import sessions, tickets
+from app.core.console.guacd import GuacdError, connect, rdp_parameters
+from app.core.console.relay import relay
 from app.core.db import now_ms, plan_runs_col
 from app.core.jobs import transport
 from app.core.jobs.models import TERMINAL_TYPES
 from app.core.jobs.replay import replay_plan_run
+from app.core.settings import settings
 
 router = APIRouter(prefix="/ws", tags=["ws"])
 
@@ -125,3 +135,92 @@ async def job_progress(
         await pubsub.unsubscribe(transport.channel(job_id))
         await pubsub.aclose()
         await redis_client.aclose()
+
+
+#: guacd is up but this VM will not take a session. Distinct from 4404 (the
+#: ticket is gone — do not retry) because a retry here can legitimately succeed.
+WS_CLOSE_CONSOLE_UNAVAILABLE = 4503
+
+#: The first size handed to guacd. The client resizes to its real viewport
+#: immediately (``resize-method=display-update``), so this is a first frame, not
+#: the user's window.
+_INITIAL_WIDTH = 1280
+_INITIAL_HEIGHT = 800
+
+
+@router.websocket("/console/{ticket_id}")
+async def console_session(
+    websocket: WebSocket, ticket_id: str, token: str | None = None
+) -> None:
+    """Relay a remote-desktop session for the VM a ticket was minted for.
+
+    The ticket carries the guest's address and the RDP credentials, which is why
+    it is redeemed here and never handed to the browser. Redemption is
+    single-use, so the checks below run against a decision made seconds ago — and
+    are then made again, because a ticket id is a bearer token and holding one
+    must not be sufficient:
+
+    * the caller must be a valid, still-enabled user (``resolve_user_token``
+      re-reads the user document, so a disable or role change lands immediately);
+    * the caller must be the user the ticket was minted for;
+    * and a guest must still own the VM — a role demotion between minting and
+      connecting has to take the session with it.
+
+    Rejections go through ``reject`` for the reason documented at the top of this
+    module: a pre-accept close is answered with a plain HTTP 403 and the
+    application close code is discarded, leaving the client unable to tell "this
+    ticket is spent" from "the connection blipped".
+    """
+    user = await resolve_user_token(token)
+    if user is None:
+        await reject(websocket, 4401)
+        return
+
+    ticket = await tickets.redeem(ticket_id)
+    if ticket is None:
+        # Unknown, expired, or already redeemed — indistinguishable on purpose.
+        await reject(websocket, 4404)
+        return
+    if ticket.owner != user.username:
+        await reject(websocket, 4403)
+        return
+    try:
+        enforce_guest_vm_ownership(ticket.vm_name, user)
+    except HTTPException:
+        await reject(websocket, 4403)
+        return
+
+    if sessions.at_capacity():
+        await reject(websocket, WS_CLOSE_CONSOLE_UNAVAILABLE)
+        return
+
+    try:
+        conn = await connect(
+            host=settings.guacd_host,
+            port=settings.guacd_port,
+            protocol="rdp",
+            parameters=rdp_parameters(
+                hostname=ticket.host,
+                username=ticket.credentials.username,
+                password=ticket.credentials.password,
+                width=_INITIAL_WIDTH,
+                height=_INITIAL_HEIGHT,
+            ),
+            width=_INITIAL_WIDTH,
+            height=_INITIAL_HEIGHT,
+        )
+    except GuacdError:
+        await reject(websocket, WS_CLOSE_CONSOLE_UNAVAILABLE)
+        return
+
+    # ``guacamole-common-js`` opens its tunnel with the "guacamole" subprotocol and
+    # will not talk to a server that does not select it.
+    await websocket.accept(subprotocol="guacamole")
+    sessions.register(ticket.vm_name, websocket)
+    try:
+        await relay(websocket, conn, keepalive_s=settings.console_keepalive_s)
+    except WebSocketDisconnect:
+        pass
+    finally:
+        sessions.unregister(ticket.vm_name, websocket)
+        await conn.close()
