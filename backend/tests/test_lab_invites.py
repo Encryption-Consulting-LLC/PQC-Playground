@@ -340,6 +340,29 @@ def test_owning_a_lab_you_also_hold_a_code_for_still_deploys(monkeypatch):
     asyncio.run(deploy_router._refuse_joined_lab_deploy(PROJECT_ID, _guest()))
 
 
+def test_a_member_sees_the_lab_s_agents_but_still_cannot_command_them(monkeypatch):
+    """Presence is widened; control is not. A healthy lab must not render as a
+    row of offline machines, and seeing that must not become driving them."""
+    from app.core.authz import enforce_guest_vm_ownership
+
+    _wire(monkeypatch, registry=[_registry_row()])
+    minted = asyncio.run(
+        labs_router.create_invite(
+            labs_router.InviteCreate(projectId=PROJECT_ID), _admin()
+        )
+    )
+    asyncio.run(
+        labs_router.join_lab(labs_router.JoinRequest(code=minted["code"]), _guest())
+    )
+
+    # What the presence filter asks.
+    asyncio.run(labs.enforce_own_or_joined_vm(LAB_VM, _guest()))
+    # What the executor command route asks — deliberately still the narrow one.
+    with pytest.raises(HTTPException) as exc:
+        enforce_guest_vm_ownership(LAB_VM, _guest())
+    assert exc.value.status_code == 403
+
+
 def test_a_lab_with_no_saved_project_cannot_be_shared(monkeypatch):
     _wire(monkeypatch, projects=[])
     with pytest.raises(HTTPException) as exc:

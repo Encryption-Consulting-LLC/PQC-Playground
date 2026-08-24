@@ -51,6 +51,7 @@ from app.core.authz import (
 )
 from app.core.db import vm_registry_col
 from app.core.jobs import transport
+from app.core.labs import enforce_own_or_joined_vm
 from app.core.jobs.models import DoneMsg, ErrorMsg, JobStatus, ProgressMsg, QueuedMsg
 from app.routers.ws import reject, send_json_or_disconnect
 
@@ -337,23 +338,30 @@ def _relay_progress(job_id: str, state: dict) -> None:
 
 
 async def _visible_agent_vm_ids(user: AuthedUser) -> list[str]:
-    """vm_ids with a currently-connected agent, filtered to the caller's own
-    namespace for guests (operators see everything)."""
+    """vm_ids with a currently-connected agent, filtered for guests to the
+    caller's own namespace plus any lab it has joined (operators see everything).
+
+    Presence, and nothing else: the command route below keeps the plain
+    own-namespace check, so seeing that a joined lab's machines are alive never
+    becomes the ability to drive them. Without the lab clause a perfectly
+    healthy pre-deployed lab renders every node with a red "executor offline"
+    dot, which is a false alarm about somebody else's working environment.
+    """
     vm_ids = agents.connected_vm_ids()
     if user.role != Role.GUEST:
         return vm_ids
 
-    owned: list[str] = []
+    visible: list[str] = []
     for vm_id in vm_ids:
         doc = await vm_registry_col().find_one({"agent.vmId": vm_id}, {"vmName": 1})
         if doc is None:
             continue
         try:
-            enforce_guest_vm_ownership(doc["vmName"], user)
+            await enforce_own_or_joined_vm(doc["vmName"], user)
         except HTTPException:
             continue
-        owned.append(vm_id)
-    return owned
+        visible.append(vm_id)
+    return visible
 
 
 @router.get(
