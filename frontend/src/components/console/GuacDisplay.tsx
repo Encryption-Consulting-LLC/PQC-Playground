@@ -54,9 +54,13 @@ export function GuacDisplay({
   const containerRef = useRef<HTMLDivElement | null>(null)
   // Handlers are read through a ref so a parent re-render (a status change, say)
   // cannot retear and redial the tunnel — which, with single-use tickets, would
-  // fail on the second dial and read as a flaky connection.
+  // fail on the second dial and read as a flaky connection. Synced in an effect
+  // rather than assigned during render, and declared above the tunnel effect so
+  // it is already current the first time the tunnel reads it.
   const handlers = useRef({ onConnected, onError, onDisconnected })
-  handlers.current = { onConnected, onError, onDisconnected }
+  useEffect(() => {
+    handlers.current = { onConnected, onError, onDisconnected }
+  }, [onConnected, onError, onDisconnected])
 
   useEffect(() => {
     const container = containerRef.current
