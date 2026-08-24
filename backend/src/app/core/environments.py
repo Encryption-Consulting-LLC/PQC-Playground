@@ -92,6 +92,12 @@ class EnvironmentSummary(BaseModel):
     #: deliberately shows the slug instead of picking one.
     owner_ambiguous: bool = Field(default=False, alias="ownerAmbiguous")
     project_code: str | None = Field(default=None, alias="projectCode")
+    #: The real project id, from the first row in the group that persisted one.
+    #: None for a group assembled purely from VM names, which carry a code and
+    #: can never yield the id it came from — so anything that has to look the
+    #: project up (issuing a lab join code, for one) can only do it for a group
+    #: that has this.
+    project_id: str | None = Field(default=None, alias="projectId")
     #: Only ever set for a project persisted in Mongo. Guest project names live
     #: in the browser, so a guest environment falls back to its code.
     project_name: str | None = Field(default=None, alias="projectName")
@@ -364,6 +370,7 @@ def _summarize(
         owner_resolved=group["owner_resolved"],
         owner_ambiguous=group["owner_ambiguous"],
         project_code=code,
+        project_id=project_id,
         project_name=project_names.get(project_id) if project_id else None,
         vms=vms,
         vm_count=len(vms),
