@@ -34,8 +34,10 @@ separately built deployment artifact and is intentionally not committed here.
 ```text
 React/Vite ──HTTP + WebSocket──> FastAPI ─────────────> MongoDB
                                    │  │
-                                   │  └──pub/sub─────> Valkey/Redis
-                                   │                     │
+                                   │  ├──pub/sub─────> Valkey/Redis
+                                   │  │                  │
+                                   │  └──guacamole───> guacd ──RDP──> guests
+                                   │                     
 Windows guest agents ──WebSocket───┘                  Celery workers
                                                            │
                                                            └──> VMware ESXi
@@ -54,6 +56,9 @@ Windows guest agents ──WebSocket───┘                  Celery workers
 - Node.js `^20.19.0` or `>=22.12.0` and `pnpm`
 - MongoDB
 - Valkey or Redis (job broker, result backend, progress bus, and agent dispatch)
+- `guacd`, Apache Guacamole's proxy daemon, for the in-browser remote desktop.
+  Optional: without it, every other feature works and the node Inspector's
+  **Remote Desktop** panel reports the service as unavailable.
 - For real deployments: a reachable VMware ESXi host, qualified Windows golden
   images, and an address range for cloned guests
 - For guided Windows provisioning: `pki-executor.exe` and a backend URL the
@@ -61,11 +66,11 @@ Windows guest agents ──WebSocket───┘                  Celery workers
 
 MongoDB is required for API startup. Valkey/Redis and the Celery workers are
 required for deployment jobs, but ESXi may be configured later from the
-operator settings UI.
+operator settings UI. `guacd` is required only for remote desktop sessions.
 
 ## Local development
 
-### 1. Start MongoDB and Valkey
+### 1. Start MongoDB, Valkey, and guacd
 
 Use existing services, or start disposable local containers:
 
@@ -73,10 +78,19 @@ Use existing services, or start disposable local containers:
 docker run -d --name pki-mongo -p 27017:27017 \
   -v pki-mongo-data:/data/db mongo:8
 docker run -d --name pki-valkey -p 6379:6379 valkey/valkey:8
+docker run -d --name pki-guacd -p 127.0.0.1:4822:4822 guacamole/guacd:1.5.5
 ```
 
 The default URLs already point at these ports. All database and broker settings
 can be overridden in `backend/.env`.
+
+Only `guacd` is started here — there is no `guacamole-client` webapp, no second
+database, and no second set of accounts. The API speaks the Guacamole protocol
+to `guacd` directly and relays it to the browser over its own authenticated
+WebSocket, so the session token remains the only credential. Bind it to
+loopback: `guacd` performs no authentication of its own. Bridge networking is
+correct — `guacd` needs outbound reach to the guest subnet, not inbound reach
+from it.
 
 ### 2. Configure and start the API
 
@@ -187,6 +201,27 @@ Open <http://localhost:5432>. Vite proxies `/api` HTTP and WebSocket traffic to
 > password before deploying) for anything that is not disposable. The value is also
 > written as plaintext PowerShell into the DC's `<vm>-config.iso`, which stays
 > attached on the datastore until the VM is torn down.
+
+### Remote desktop
+
+Deployed Windows guests enable RDP during first boot and receive a local
+`Administrator` password the backend keeps, so **Remote Desktop → Connect** in
+the node Inspector opens the guest desktop with no credential prompt. Two host
+requirements apply:
+
+1. `guacd` must be reachable at `GUACD_HOST:GUACD_PORT` (default
+   `127.0.0.1:4822`).
+2. The reverse proxy in front of the API must not time out an idle WebSocket. An
+   unattended desktop sends no traffic, and nginx's default `proxy_read_timeout`
+   of 60 seconds closes the session mid-use. Raise it on the proxied location:
+
+   ```nginx
+   proxy_read_timeout 3600s;
+   ```
+
+Guests deployed before this feature existed carry no stored password. The panel
+reports that and asks for a redeploy rather than offering a connection that
+cannot authenticate. Linux product templates have no remote desktop.
 
 Environment values such as `ESXI_*`, `CLONE_*`, and `GUEST_*` only seed the
 Mongo settings document when values are absent. Once seeded, the operator-edited
