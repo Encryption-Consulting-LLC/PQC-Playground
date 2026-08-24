@@ -34,10 +34,13 @@ export function formatApiErrorDetail(detail: unknown): string | null {
   if (!detail || typeof detail !== "object") return null
 
   const structured = detail as StructuredErrorDetail
-  const summary = typeof structured.message === "string" ? structured.message : null
+  const summary =
+    typeof structured.message === "string" ? structured.message : null
   const failedChecks = Array.isArray(structured.preflight?.checks)
     ? structured.preflight.checks
-        .filter((check) => check?.ok === false && typeof check.detail === "string")
+        .filter(
+          (check) => check?.ok === false && typeof check.detail === "string",
+        )
         .map((check) => check.detail as string)
     : []
 
@@ -106,7 +109,8 @@ export const login = (req: LoginRequest) =>
     body: JSON.stringify(req),
   })
 
-export const logout = () => request<{ status: string }>(URLS.auth.logout, { method: "POST" })
+export const logout = () =>
+  request<{ status: string }>(URLS.auth.logout, { method: "POST" })
 
 export interface AuthConfig {
   oidcEnabled: boolean
@@ -159,7 +163,8 @@ export interface AdminUser {
   updatedAt: number | null
 }
 
-export const listUsers = () => request<{ users: AdminUser[]; count: number }>(URLS.adminUsers.list)
+export const listUsers = () =>
+  request<{ users: AdminUser[]; count: number }>(URLS.adminUsers.list)
 
 export interface UserCreateRequest {
   username: string
@@ -386,23 +391,93 @@ export interface ActiveDeployment {
 }
 
 export const listDeployments = () =>
-  request<{ deployments: ActiveDeployment[]; count: number }>(URLS.deployments.list)
+  request<{ deployments: ActiveDeployment[]; count: number }>(
+    URLS.deployments.list,
+  )
 
 /**
  * Cooperatively stop deployments. Omit `owner` to stop every user's active
  * deployments; pass one to stop just that user's. `mode` defaults to "step"
  * (the most immediate cooperative boundary) on the backend.
  */
-export const stopDeployments = (body: { owner?: string; mode?: "step" | "operation" }) =>
+export const stopDeployments = (body: {
+  owner?: string
+  mode?: "step" | "operation"
+}) =>
   request<{ stopped: string[]; count: number }>(URLS.deployments.stop, {
     method: "POST",
+    body: JSON.stringify(body),
+  })
+
+// --- /admin/labs -------------------------------------------------------------
+
+/** One join code. `code` is what a client sends back; `displayCode` is the
+ * grouped form a human is shown, so no UI has to know the grouping rule. */
+export interface LabInvite {
+  code: string
+  displayCode: string
+  projectId: string
+  owner: string | null
+  label: string | null
+  revoked: boolean
+  members: string[]
+  memberCount: number
+  createdBy: string | null
+  createdAt: number | null
+  updatedAt: number | null
+}
+
+/**
+ * A deployed environment as a shareable lab. Same grouping the VM Registry's
+ * Environments tab shows, minus the per-VM orphan classification — this route
+ * deliberately reads no ESXi inventory, so it stays up when the host is down.
+ */
+export interface Lab {
+  key: string
+  owner: string | null
+  ownerResolved: boolean
+  projectId: string | null
+  projectCode: string | null
+  projectName: string | null
+  vms: string[]
+  vmCount: number
+  ipCount: number
+  createdAt: number | null
+  updatedAt: number | null
+  /** False when no saved project backs these VMs — there is nothing to hand a
+   * joiner, so a code cannot be minted. */
+  snapshotAvailable: boolean
+  invite: LabInvite | null
+}
+
+export const listLabs = () =>
+  request<{ labs: Lab[]; count: number }>(URLS.labs.list)
+
+export const createLabInvite = (body: { projectId: string; label?: string }) =>
+  request<LabInvite>(URLS.labs.invites, {
+    method: "POST",
+    body: JSON.stringify(body),
+  })
+
+/** Revoking is the cohort-wide off switch: every account that redeemed this
+ * code loses the lab, and its desktops, on the next request. */
+export const patchLabInvite = (
+  code: string,
+  body: { revoked?: boolean; label?: string },
+) =>
+  request<LabInvite>(URLS.labs.invite(code), {
+    method: "PATCH",
     body: JSON.stringify(body),
   })
 
 // --- /admin/teardown ---------------------------------------------------------
 
 /** Why a registry entry looks abandoned. A row can fire several at once. */
-export type OrphanSignal = "absentFromEsxi" | "agentDead" | "statusError" | "stuckCloning"
+export type OrphanSignal =
+  | "absentFromEsxi"
+  | "agentDead"
+  | "statusError"
+  | "stuckCloning"
 
 export interface EnvironmentVm {
   vmName: string
@@ -463,7 +538,8 @@ export interface ConsoleTicket {
 export const mintAdminConsoleTicket = (vmName: string) =>
   request<ConsoleTicket>(URLS.console.ticket(vmName), { method: "POST" })
 
-export const listEnvironments = () => request<EnvironmentList>(URLS.teardown.environments)
+export const listEnvironments = () =>
+  request<EnvironmentList>(URLS.teardown.environments)
 
 export type OrphanEntry = EnvironmentVm & {
   owner: string | null

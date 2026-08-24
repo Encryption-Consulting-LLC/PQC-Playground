@@ -1,5 +1,9 @@
 import type { QueryClient } from "@tanstack/react-query"
-import { createRootRouteWithContext, createRoute, redirect } from "@tanstack/react-router"
+import {
+  createRootRouteWithContext,
+  createRoute,
+  redirect,
+} from "@tanstack/react-router"
 import { FileQuestion } from "lucide-react"
 
 import { AppShell } from "@/components/AppShell"
@@ -11,6 +15,7 @@ import { ImagePane } from "@/sections/infrastructure/ImagePane"
 import { RolesPane } from "@/sections/infrastructure/RolesPane"
 import { DeploymentsSection } from "@/sections/DeploymentsSection"
 import { IpPoolSection } from "@/sections/IpPoolSection"
+import { LabsSection } from "@/sections/LabsSection"
 import { RegistrySection } from "@/sections/RegistrySection"
 import { EnvironmentsPanel } from "@/sections/registry/EnvironmentsPanel"
 import { OrphansPanel } from "@/sections/registry/OrphansPanel"
@@ -35,8 +40,8 @@ function NotFound() {
       <FileQuestion className="size-8 text-muted-foreground" />
       <p className="text-sm font-medium">No such page.</p>
       <p className="max-w-sm text-xs text-muted-foreground">
-        That address doesn&apos;t match a section of the admin console. Pick one from the
-        sidebar.
+        That address doesn&apos;t match a section of the admin console. Pick one
+        from the sidebar.
       </p>
     </div>
   )
@@ -115,6 +120,12 @@ const ipPoolRoute = createRoute({
   component: IpPoolSection,
 })
 
+const labsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: "/labs",
+  component: LabsSection,
+})
+
 // A layout, not a leaf: RegistrySection renders the teardown progress card
 // above the tab Outlet, so a running teardown survives a tab change.
 const registryRoute = createRoute({
@@ -143,7 +154,10 @@ const registryEnvironmentsRoute = createRoute({
   path: "/environments",
   validateSearch: (search: Record<string, unknown>): { expanded?: string } => {
     const raw = typeof search.expanded === "string" ? search.expanded : ""
-    const keys = [...new Set(raw.split(",").filter(Boolean))].slice(0, MAX_EXPANDED)
+    const keys = [...new Set(raw.split(",").filter(Boolean))].slice(
+      0,
+      MAX_EXPANDED,
+    )
     // Omitted rather than empty, so a collapsed table has a clean URL.
     return keys.length ? { expanded: keys.join(",") } : {}
   },
@@ -178,6 +192,7 @@ export const routeTree = rootRoute.addChildren([
   ]),
   deploymentsRoute,
   ipPoolRoute,
+  labsRoute,
   registryRoute.addChildren([
     registryIndexRoute,
     registryEnvironmentsRoute,

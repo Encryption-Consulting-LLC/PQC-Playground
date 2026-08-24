@@ -1,4 +1,11 @@
-import { Network, Rocket, Server, ShieldAlert, Users2 } from "lucide-react"
+import {
+  KeyRound,
+  Network,
+  Rocket,
+  Server,
+  ShieldAlert,
+  Users2,
+} from "lucide-react"
 import type { LinkProps } from "@tanstack/react-router"
 import type { LucideIcon } from "lucide-react"
 
@@ -31,5 +38,6 @@ export const SECTIONS: NavItem[] = [
   { to: "/infrastructure", label: "Infrastructure", icon: Server },
   { to: "/deployments", label: "Deployments", icon: Rocket },
   { to: "/ip-pool", label: "IP Pool", icon: Network },
+  { to: "/labs", label: "Labs", icon: KeyRound },
   { to: "/registry", label: "VM Registry", icon: ShieldAlert },
 ]

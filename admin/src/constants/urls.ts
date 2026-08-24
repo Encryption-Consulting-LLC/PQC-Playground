@@ -30,6 +30,14 @@ export const URLS = {
     validateEnvironment: "/settings/environment/validate",
   },
   ipPool: "/ip-pool",
+  // Pre-deployed labs and their join codes. Minting is admin-only
+  // (Capability.LAB_ADMIN); the canvas app's `/labs` routes are the redeeming
+  // half and are never called from here.
+  labs: {
+    list: "/admin/labs",
+    invites: "/admin/labs/invites",
+    invite: (code: string) => `/admin/labs/invites/${encodeURIComponent(code)}`,
+  },
   vmRegistry: "/vm-registry",
   deployments: {
     list: "/admin/deployments",
@@ -52,6 +60,7 @@ export const URLS = {
     jobs: (jobId: string) => `/ws/jobs/${encodeURIComponent(jobId)}`,
     // Redeems a console ticket and carries the Guacamole protocol. Handed to
     // guacamole-common-js's own tunnel, not `lib/ws.ts`.
-    console: (ticketId: string) => `/ws/console/${encodeURIComponent(ticketId)}`,
+    console: (ticketId: string) =>
+      `/ws/console/${encodeURIComponent(ticketId)}`,
   },
 } as const
