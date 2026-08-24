@@ -16,26 +16,42 @@ runs as a visible executor step instead of blocking the connection.
 ``role_scripts_for`` remains the hook for a genuinely firstboot-only script (one
 that must run *before* the agent), but the shipping templates carry none.
 
-The one credential exception is ``admin_password`` (a domain controller's
-``domainAdminPassword``), which renders a ``Set-LocalUser`` step for the built-in
-local ``Administrator``. It cannot be an executor step: ``Install-ADDSForest``
-promotes the *local* Administrator into the new forest as the built-in **domain**
-Administrator, keeping its password, so the reset has to land *before* promotion
-— and the agent's command set has no way to set a password at all. That password
-is what every later ``domain.join`` and the issuing-CA install authenticate with
-as ``<NETBIOS>\\Administrator``.
+``admin_password`` renders a ``Set-LocalUser`` step for the built-in local
+``Administrator``, and every Windows template gets one. It cannot be an executor
+step: ``Install-ADDSForest`` promotes the *local* Administrator into the new
+forest as the built-in **domain** Administrator, keeping its password, so the
+reset has to land *before* promotion — and the agent's command set has no way to
+set a password at all.
+
+The password's *source* differs by role, and the caller decides (see
+``tasks.py``): a domain controller uses the operator's ``domainAdminPassword``,
+because that is what every later ``domain.join`` and the issuing-CA install
+authenticate with as ``<NETBIOS>\\Administrator``. Every other Windows template
+gets a per-VM generated password, persisted AES-GCM on its ``vm_registry`` row,
+which exists so remote desktop has a credential to sign in with — a member
+server has no domain-wide account of its own, and a local account survives a
+domain join.
 
 Numbering fixes manifest (execution) order: ``10-`` hostname, ``20-`` network,
-``40-`` agent install (bundled path only), ``50-`` local Administrator password
-(domain controllers only). isokit packs in the order received, so the list handed
-to it *is* the manifest order — the numeric names only document it.
+``30-`` Remote Desktop enablement (every Windows template), ``40-`` agent install
+(bundled path only), ``50-`` local Administrator password. isokit packs in the
+order received, so the list handed to it *is* the manifest order — the numeric
+names only document it.
+
+``30-enable-rdp.ps1`` is the other firstboot-only step, for the same reason the
+agent installer is one: it has to work on a VM whose agent never came up, which
+is precisely when someone needs to look inside. It is likewise not overridable
+from PACK mode.
 Scripts never reboot — the firstboot runner in the base image owns the single
 reboot (established configgen convention).
 
 The disc is not a secret store: it already ships the agent's bearer token in
-``executor.toml`` and now a domain controller's Administrator password as
-plaintext PowerShell, and vmkit leaves it attached at
-``[datastore] <vm>/<vm>-config.iso`` for the VM's lifetime.
+``executor.toml`` and a Windows guest's local Administrator password as plaintext
+PowerShell, and vmkit leaves it attached at
+``[datastore] <vm>/<vm>-config.iso`` for the VM's lifetime. Generalizing the
+password step from domain controllers to every Windows template adds one more
+password to a disc that already had this property; it does not change the threat
+model, but it does mean *every* lab VM's disc now carries one.
 
 Operator-authored scripts (the Inspector's Config ISO panel, PACK mode) are
 *layered over* this set rather than replacing it: ``authored_scripts`` lets a
@@ -70,6 +86,14 @@ _AGENT_INSTALL_SCRIPT = (
     / "firstboot"
     / "_agent"
     / "40-install-executor.ps1"
+)
+#: Static Remote Desktop enablement step, packed for every Windows template.
+#: Non-overridable for the same reason the agent installer is: a PACK-mode file
+#: of the same name silently disabling remote desktop across a whole lab is not a
+#: capability the Config ISO panel should hand out. Lives under ``_rdp``
+#: (leading underscore → not a template dir, never role-globbed).
+_RDP_ENABLE_SCRIPT = (
+    Path(__file__).parent.parent / "assets" / "firstboot" / "_rdp" / "30-enable-rdp.ps1"
 )
 #: The Windows built-in local administrator. ``Install-ADDSForest`` carries *this*
 #: account's password into the new forest as the built-in **domain** Administrator
@@ -185,8 +209,12 @@ def build_firstboot_iso(
 
     A non-empty ``admin_password`` on a Windows template additionally renders
     ``50-password.ps1``, resetting the guest's built-in local ``Administrator``
-    (see ``LOCAL_ADMIN_ACCOUNT``). Blank — every template but a domain
-    controller — renders nothing, as does any Linux template.
+    (see ``LOCAL_ADMIN_ACCOUNT``). Blank renders nothing, as does any Linux
+    template. Callers pass one for every Windows template — the DC's operator-set
+    ``domainAdminPassword``, or a generated per-VM password for the rest.
+
+    Every Windows template also gets the static ``30-enable-rdp.ps1`` step, which
+    is not overridable via ``authored_scripts``.
 
     ``authored_scripts`` is the operator's ``(name, content)`` set from the
     Config ISO panel, layered over the above: a name matching one of the
@@ -220,10 +248,11 @@ def build_firstboot_iso(
     authored: dict[str, Path] = {}
     for name, content in authored_scripts or []:
         # Never overridable: the agent's install step is what makes the VM
-        # reachable at all, and packing two entries under one disc filename is an
-        # isokit collision. Skipped before the write so no shadow copy is left
-        # in dest_dir to confuse anyone reading the build directory.
-        if name == _AGENT_INSTALL_SCRIPT.name:
+        # reachable at all, the RDP step is what makes it *visible* at all, and
+        # packing two entries under one disc filename is an isokit collision.
+        # Skipped before the write so no shadow copy is left in dest_dir to
+        # confuse anyone reading the build directory.
+        if name in (_AGENT_INSTALL_SCRIPT.name, _RDP_ENABLE_SCRIPT.name):
             continue
         path = dest_dir / name
         path.write_text(content, encoding="utf-8")
@@ -277,9 +306,13 @@ def build_firstboot_iso(
     # What's left is genuinely additional. Sorted so the manifest order the
     # numeric prefixes document is the order isokit receives.
     extra_scripts = [authored[name] for name in sorted(authored)]
+    # Windows only: there is no RDP on the Linux product templates, and guacd
+    # would need a different protocol (and credentials we never set) for them.
+    rdp_scripts = [_RDP_ENABLE_SCRIPT] if platform == "windows" else []
     scripts = [
         hostname_script,
         network_script,
+        *rdp_scripts,
         *role_scripts_for(template),
         *extra_scripts,
     ]

@@ -84,6 +84,7 @@ def test_password_script_is_packed_after_the_agent_install(packed, tmp_path):
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "40-install-executor.ps1",
         "50-password.ps1",
     ]
@@ -113,7 +114,12 @@ def test_agentless_path_still_gets_the_password_script(packed, tmp_path):
 
     _build(tmp_path, admin_password=PASSWORD)
 
-    assert packed == ["10-hostname.ps1", "20-network.ps1", "50-password.ps1"]
+    assert packed == [
+        "10-hostname.ps1",
+        "20-network.ps1",
+        "30-enable-rdp.ps1",
+        "50-password.ps1",
+    ]
 
 
 @pytest.mark.parametrize("template", ["domainController", "webServer"])
