@@ -11,7 +11,8 @@
 #      agent (wget from GitHub Releases) into backend/agent/.
 #   4. Build the frontend and admin app (pnpm build → */dist), both served
 #      same-origin by the API's static mounts.
-#   5. Health-check the already-running MongoDB and Valkey.
+#   5. Health-check the already-running MongoDB and Valkey (and guacd, which is
+#      optional — see GUACD_URL below).
 #   6. Seed the first admin account on the FIRST deploy only (prompts for
 #      credentials interactively, or auto-generates a password unattended).
 #      Redeploys detect the existing admin and skip this entirely — no prompt.
@@ -66,6 +67,12 @@ EXEC_ASSET="${EXEC_ASSET:-pki-executor.exe}"     # asset filename on the release
 # Datastores are assumed already running; we only health-check them.
 MONGO_URL="${MONGO_URL:-mongodb://localhost:27017}"
 VALKEY_URL="${VALKEY_URL:-redis://localhost:6379/0}"
+# guacd (Apache Guacamole's proxy daemon) backs the in-browser remote desktop.
+# Optional: unreachable only disables that one feature, so it is warned about
+# rather than fatal. Run it the same way MongoDB is run on this host:
+#   docker run -d --name guacd --restart unless-stopped \
+#     -p 127.0.0.1:4822:4822 guacamole/guacd:1.5.5
+GUACD_URL="${GUACD_URL:-tcp://127.0.0.1:4822}"
 
 SYSTEMD_DIR="$HOME/.config/systemd/user"
 
@@ -121,8 +128,10 @@ ensure_var() {
 }
 
 # Extract host:port from a mongodb:// or redis:// URL and test TCP reachability.
+# A third arg of `optional` downgrades an unreachable service from fatal to a
+# warning — for dependencies whose absence disables a feature rather than the app.
 check_tcp() {
-  local name="$1" url="$2" hostport host port
+  local name="$1" url="$2" flags="${3:-}" hostport host port
   hostport="${url#*://}"       # strip scheme
   hostport="${hostport%%/*}"   # strip /path and /db
   hostport="${hostport##*@}"   # strip user:pass@
@@ -132,6 +141,8 @@ check_tcp() {
   [ -z "$port" ] && case "$url" in redis:*) port=6379;; *) port=27017;; esac
   if timeout 3 bash -c ": >/dev/tcp/$host/$port" 2>/dev/null; then
     log "$name reachable at $host:$port"
+  elif [[ "$flags" == *optional* ]]; then
+    warn "$name not reachable at $host:$port — features that depend on it stay unavailable."
   else
     die "$name not reachable at $host:$port — start it before deploying."
   fi
@@ -276,6 +287,7 @@ log "Building admin app"
 log "Health-checking datastores"
 check_tcp MongoDB "$MONGO_URL"
 check_tcp Valkey "$VALKEY_URL"
+check_tcp guacd "$GUACD_URL" optional
 
 # ----------------------------------------------------------------------------
 # 6. Seed the first admin account — first deploy only

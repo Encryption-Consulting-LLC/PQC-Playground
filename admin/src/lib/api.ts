@@ -446,6 +446,23 @@ export interface EnvironmentList {
   esxiReachable: boolean
 }
 
+/** A one-shot authorization to open a remote-desktop session on any VM.
+ *
+ * The admin twin of the operator app's `mintConsoleTicket`, and it crosses the
+ * ownership boundary an admin otherwise has no way past — the same reason the
+ * teardown routes exist. Carries no credential: the backend keeps the RDP
+ * username, password and guest address and hands them to guacd itself, so the
+ * browser only ever holds an opaque ticket id. */
+export interface ConsoleTicket {
+  ticketId: string
+  vmName: string
+  credentialLabel: string
+  expiresInSeconds: number
+}
+
+export const mintAdminConsoleTicket = (vmName: string) =>
+  request<ConsoleTicket>(URLS.console.ticket(vmName), { method: "POST" })
+
 export const listEnvironments = () => request<EnvironmentList>(URLS.teardown.environments)
 
 export type OrphanEntry = EnvironmentVm & {

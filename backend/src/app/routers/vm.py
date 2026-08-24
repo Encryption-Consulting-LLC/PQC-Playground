@@ -22,6 +22,7 @@ from vmkit.errors import VmNotFoundError
 from vmkit.esxi import get_vm_by_name, list_vm_names, power_off_vm, power_on_vm
 from vmkit.workflows import get_vm_config, validate_disk_usage
 
+from app.core.console.sessions import revoke_live_console_sockets
 from app.core.authz import (
     AuthedUser,
     Capability,
@@ -235,7 +236,13 @@ async def delete_vm(
         )
     enforce_guest_vm_ownership(name, user)
 
+    # Cut both live sockets loose first: the agent must not keep taking commands
+    # while its VM is destroyed, and an open remote-desktop session must die with
+    # a code the overlay can tell apart from a blip — otherwise it sits there
+    # retrying against a VM that no longer exists. Both maps are per-process,
+    # which is why this happens API-side rather than in the worker.
     await agents.revoke_live_agent_sockets([name])
+    await revoke_live_console_sockets([name])
 
     job_id = uuid.uuid4().hex
     transport.publish(job_id, QueuedMsg(), status=JobStatus.queued)

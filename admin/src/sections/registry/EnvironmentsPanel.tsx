@@ -1,13 +1,21 @@
 import { useMemo, useState } from "react"
 import { useMutation, useQuery } from "@tanstack/react-query"
 import { getRouteApi } from "@tanstack/react-router"
-import { ChevronDown, ChevronRight, Loader2, ServerCrash, Trash2 } from "lucide-react"
+import {
+  ChevronDown,
+  ChevronRight,
+  Loader2,
+  Monitor,
+  ServerCrash,
+  Trash2,
+} from "lucide-react"
 
 import { QUERY_KEYS } from "@/constants"
 import { listEnvironments, startTeardown, type Environment, type EnvironmentVm } from "@/lib/api"
 import { formatDate, showError, statusVariant } from "@/lib/display"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import { useConsoleStore } from "@/store/console"
 import {
   Table,
   TableBody,
@@ -274,6 +282,10 @@ function VmLine({
   busy: boolean
   onDestroy: () => void
 }) {
+  const startConsole = useConsoleStore((s) => s.start)
+  const connecting = useConsoleStore(
+    (s) => s.session?.vmName === vm.vmName && s.session.status === "authorizing",
+  )
   return (
     <li className="flex flex-wrap items-center gap-(--gap-inline)">
       <span className="font-mono text-xs">{vm.vmName}</span>
@@ -290,10 +302,33 @@ function VmLine({
           agent {vm.agentState}
         </Badge>
       )}
-      <span
-        className="ml-auto"
-        title={busy ? "Another teardown is already running." : undefined}
-      >
+      {/* Deliberately not adjacent in weight to Destroy: outline, not
+          destructive, and a different noun and icon. The registry tabs already
+          keep destroy and purge apart by colour, icon and location because they
+          read alike and mean opposite things — a third per-row action must not
+          muddy that. It is also placed first, so the rightmost button on the row
+          stays the destructive one everywhere in this panel. */}
+      <span className="ml-auto">
+        <Button
+          variant="outline"
+          size="xs"
+          disabled={connecting || !vm.ip}
+          title={
+            vm.ip
+              ? "Open this VM's desktop"
+              : "This VM has no address yet — nothing to connect to."
+          }
+          onClick={() => void startConsole({ vmName: vm.vmName, label: vm.vmName })}
+        >
+          {connecting ? (
+            <Loader2 className="mr-1 animate-spin" />
+          ) : (
+            <Monitor className="mr-1" />
+          )}
+          Console
+        </Button>
+      </span>
+      <span title={busy ? "Another teardown is already running." : undefined}>
         <Button variant="destructive" size="xs" disabled={busy} onClick={onDestroy}>
           <Trash2 className="mr-1" />
           Destroy

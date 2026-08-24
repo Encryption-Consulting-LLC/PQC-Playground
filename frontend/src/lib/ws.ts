@@ -13,6 +13,12 @@ import { API_BASE, URLS } from "@/constants"
 export const WS_CLOSE_JOB_GONE = 4404
 /** The session token was rejected on the upgrade. */
 export const WS_CLOSE_UNAUTHORIZED = 4401
+/** Console only: guacd is up but this session cannot start (service down, or
+ * every session slot in use). Retryable, unlike 4404. */
+export const WS_CLOSE_CONSOLE_UNAVAILABLE = 4503
+/** Console only: the VM is being torn down — the same code the guest agent's
+ * socket gets, so "this VM is going away" means one thing everywhere. */
+export const WS_CLOSE_VM_GONE = 4410
 
 export interface QueuedEvent {
   type: "queued"
@@ -93,6 +99,28 @@ function wsUrl(path: string, token: string | null | undefined): string {
   const proto = window.location.protocol === "https:" ? "wss:" : "ws:"
   const base = `${proto}//${window.location.host}${API_BASE}${path}`
   return token ? `${base}?token=${encodeURIComponent(token)}` : base
+}
+
+/**
+ * The console tunnel's URL — deliberately *without* a query string.
+ *
+ * The console cannot use `openJobSocket`: guacamole-common-js brings its own
+ * `WebSocketTunnel` and speaks the Guacamole protocol, not this module's
+ * `JobMessage` union. It shares the `?token=` and `WS_CLOSE_*` conventions and
+ * nothing else.
+ *
+ * The token is returned separately because `WebSocketTunnel.connect(data)`
+ * builds the socket as `` `${tunnelURL}?${data}` `` itself. Appending the query
+ * here too would produce `…?token=x?token=x` and a 4401 on a token the caller
+ * did in fact have.
+ */
+export function consoleTunnelUrl(ticketId: string): string {
+  return wsUrl(URLS.ws.console(ticketId), null)
+}
+
+/** The `data` argument for `WebSocketTunnel.connect` — see `consoleTunnelUrl`. */
+export function consoleTunnelData(token: string | null | undefined): string {
+  return token ? `token=${encodeURIComponent(token)}` : ""
 }
 
 /**

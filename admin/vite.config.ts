@@ -15,6 +15,12 @@ export default defineConfig({
   resolve: {
     alias: {
       "@": path.resolve(__dirname, "./src"),
+      // The remote-desktop viewer is shared with the operator app rather than
+      // ported. `lib/ws.ts` is duplicated between the two apps deliberately — it
+      // is small and the copies have diverged on purpose — but a Guacamole
+      // protocol client is too large to keep in step by hand. Both apps run the
+      // same React, Tailwind and Base UI versions, so one file serves both.
+      "@shared": path.resolve(__dirname, "../frontend/src"),
     },
   },
   server: {

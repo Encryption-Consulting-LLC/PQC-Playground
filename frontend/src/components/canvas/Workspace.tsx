@@ -4,6 +4,7 @@ import { Canvas } from "./Canvas"
 import { Inspector } from "./Inspector"
 import { ProjectLanding } from "./ProjectLanding"
 import { ProjectTabBar } from "./ProjectTabBar"
+import { RemoteDesktopOverlay } from "./RemoteDesktopOverlay"
 import { Toolbox } from "./Toolbox"
 import { useAgentPromotion } from "@/hooks/useAgentPromotion"
 import { attachAgentsSocket } from "@/store/agents"
@@ -78,6 +79,9 @@ export function Workspace() {
           </div>
         </div>
       </div>
+      {/* Mounted once, driven by store/console — a full-screen session must not
+          unmount when the Inspector's selection changes. */}
+      <RemoteDesktopOverlay />
     </ReactFlowProvider>
   )
 }

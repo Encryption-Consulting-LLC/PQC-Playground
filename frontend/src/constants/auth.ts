@@ -30,6 +30,11 @@ export const CAPABILITIES = {
   configGenerate: "config:generate",
   isoAuthor: "iso:author", // operator-only — authored/uploaded config ISOs
   vmExecArbitrary: "vm:exec-arbitrary", // reserved — future executor phase
+  // Remote desktop. Held by operators *and* guests — a session only reaches a
+  // VM the holder could already deploy and destroy, and the backend scopes it
+  // to the caller's own VMs. Admins hold the separate vm:console-admin instead
+  // and use the /admin console, which this app never renders.
+  vmConsole: "vm:console",
   deploy: "deploy",
   // Held by every canvas role; the backend scopes each project to its owner,
   // so these gate whether an account has saved projects, never whose.

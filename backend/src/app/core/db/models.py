@@ -112,6 +112,16 @@ class VmRegistryEntry(MongoModel):
     # allocation state — this is the display/registry copy.
     ip: str | None = None
     job_id: str | None = Field(default=None, alias="jobId")
+    # AES-GCM envelope (``core.secrets.encrypt_secret``) for the guest's built-in
+    # local ``Administrator`` password, which firstboot set. Server-written only —
+    # it is what the remote-desktop console signs in with, so it is deliberately
+    # absent from ``VmRegistryUpsert`` and stripped from the registry read. None
+    # on a domain controller (its credential is the operator's
+    # ``domainAdminPassword``, already stored under ``agent.templateConfig``), on
+    # a Linux template, and on any VM cloned before the console existed.
+    local_admin_password_enc: dict | None = Field(
+        default=None, alias="localAdminPasswordEnc"
+    )
     schema_version: int = Field(default=1, alias="schemaVersion")
     created_at: int = Field(alias="createdAt")
     updated_at: int = Field(alias="updatedAt")

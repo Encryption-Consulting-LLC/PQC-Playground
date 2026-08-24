@@ -35,6 +35,12 @@ export const URLS = {
     list: "/admin/deployments",
     stop: "/admin/deployments/stop",
   },
+  console: {
+    // Crosses the ownership boundary an admin otherwise has no way past — the
+    // same reason the teardown routes below exist. Gated on VM_CONSOLE_ADMIN,
+    // which no operator or guest holds.
+    ticket: (vmName: string) => `/admin/console/${encodeURIComponent(vmName)}`,
+  },
   teardown: {
     environments: "/admin/teardown/environments",
     orphans: "/admin/teardown/orphans",
@@ -44,5 +50,8 @@ export const URLS = {
   },
   ws: {
     jobs: (jobId: string) => `/ws/jobs/${encodeURIComponent(jobId)}`,
+    // Redeems a console ticket and carries the Guacamole protocol. Handed to
+    // guacamole-common-js's own tunnel, not `lib/ws.ts`.
+    console: (ticketId: string) => `/ws/console/${encodeURIComponent(ticketId)}`,
   },
 } as const

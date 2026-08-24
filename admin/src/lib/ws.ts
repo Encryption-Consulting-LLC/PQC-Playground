@@ -96,6 +96,26 @@ function wsUrl(path: string, token: string | null | undefined): string {
 }
 
 /**
+ * The console tunnel's URL — deliberately *without* a query string.
+ *
+ * guacamole-common-js brings its own `WebSocketTunnel` and speaks the Guacamole
+ * protocol, so it cannot use `openJobSocket`; it shares the `?token=` convention
+ * and nothing else. The token is returned separately because
+ * `WebSocketTunnel.connect(data)` builds the socket as `` `${url}?${data}` ``
+ * itself — appending the query here too yields `…?token=x?token=x` and a 4401 on
+ * a token the caller did in fact have.
+ */
+export function consoleTunnelUrl(ticketId: string): string {
+  return wsUrl(URLS.ws.console(ticketId), null)
+}
+
+/** The `data` argument for `WebSocketTunnel.connect` — see `consoleTunnelUrl`. */
+export function consoleTunnelData(): string {
+  const token = useAuthStore.getState().token
+  return token ? `token=${encodeURIComponent(token)}` : ""
+}
+
+/**
  * Subscribe to a job's progress. Returns a `close()` that detaches handlers and
  * closes the socket; safe to call after a terminal frame.
  *

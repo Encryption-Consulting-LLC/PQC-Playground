@@ -87,6 +87,7 @@ def test_authored_hostname_replaces_the_rendered_one(packed, tmp_path):
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "40-install-executor.ps1",
     ]
     assert (tmp_path / "10-hostname.ps1").read_text(
@@ -112,6 +113,7 @@ def test_authored_files_keep_the_agent_and_the_password_script(packed, tmp_path)
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "40-install-executor.ps1",
         "50-password.ps1",
     ]
@@ -135,6 +137,7 @@ def test_extra_authored_files_land_before_the_agent_install(packed, tmp_path):
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "30-first.ps1",
         "32-second.ps1",
         "40-install-executor.ps1",
@@ -156,6 +159,7 @@ def test_authored_agent_install_is_dropped_not_duplicated(packed, tmp_path):
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "40-install-executor.ps1",
     ]
     # Dropped before the write, so no shadow copy is left in the build dir for
@@ -173,6 +177,7 @@ def test_authored_password_script_keeps_its_post_agent_position(packed, tmp_path
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "40-install-executor.ps1",
         "50-password.ps1",
     ]
@@ -184,6 +189,38 @@ def test_no_authored_scripts_is_the_untouched_default_path(packed, tmp_path):
     assert packed == [
         "10-hostname.ps1",
         "20-network.ps1",
+        "30-enable-rdp.ps1",
         "40-install-executor.ps1",
         "50-password.ps1",
     ]
+
+
+def test_authored_rdp_script_is_dropped_not_duplicated(packed, tmp_path):
+    """Remote desktop is not a PACK-mode opt-out. An authored file of the same
+    name is dropped like the agent installer's, so no operator can silently
+    leave a whole lab unreachable from the console."""
+
+    _build(
+        tmp_path,
+        agent=_bundle(tmp_path),
+        authored_scripts=[("30-enable-rdp.ps1", "exit 0")],
+    )
+
+    assert packed == [
+        "10-hostname.ps1",
+        "20-network.ps1",
+        "30-enable-rdp.ps1",
+        "40-install-executor.ps1",
+    ]
+    # Dropped before the write, so the real asset's disc entry cannot be
+    # confused with a shadow copy in the build directory.
+    assert not (tmp_path / "30-enable-rdp.ps1").exists()
+
+
+def test_linux_template_never_gets_the_rdp_script(packed, tmp_path):
+    """``Enable-NetFirewallRule`` is Windows-only, and the Linux product
+    templates have no remote desktop at all."""
+
+    _build(tmp_path, template="certsecure")
+
+    assert packed == ["10-hostname.sh", "20-network.sh"]

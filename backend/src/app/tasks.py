@@ -46,7 +46,7 @@ from app.core.db.models import now_ms
 from app.core.db.sync import worker_db
 from app.core.errors import map_vmkit_error
 from app.core.esxi import load_target_sync
-from app.core.firstboot import AgentBundle, build_firstboot_iso
+from app.core.firstboot import AgentBundle, build_firstboot_iso, platform_for_template
 from app.core.golden_image import (
     GoldenImageConfig,
     GoldenImagePreflight,
@@ -72,10 +72,12 @@ from app.core.infrastructure_preflight import (
 from app.core.settings import settings
 from app.core.evidence import redact_evidence
 from app.core.vm_naming import project_code
+from app.core.secrets import decrypt_secret, encrypt_secret
 from app.core.template_config import (
     DOMAIN_ADMIN_PASSWORD_KEY,
     encrypt_config_secrets,
     extract_template_config,
+    generate_local_admin_password,
 )
 from app.core.jobs import transport
 from app.core.jobs.models import (
@@ -1033,6 +1035,35 @@ def _run_clone_op(
             push()
             return False
 
+    # The guest's local ``Administrator`` password, which firstboot sets and the
+    # remote-desktop console later signs in with. A domain controller is excluded:
+    # ``Install-ADDSForest`` turns *its* local Administrator into the domain
+    # Administrator, so its credential must stay the operator's
+    # ``domainAdminPassword`` (already stored under ``agent.templateConfig``) or
+    # every later domain join breaks. An uploaded ISO is excluded too — that disc
+    # is attached verbatim, so no password script runs and claiming one was set
+    # would be a lie the console would then fail on.
+    local_admin_password = ""
+    local_admin_enc: dict | None = None
+    if (
+        not authored
+        and platform_for_template(template) == "windows"
+        and template != "domainController"
+    ):
+        existing = db["vm_registry"].find_one(
+            {"vmName": vm_name}, {"localAdminPasswordEnc": 1}
+        )
+        local_admin_enc = (existing or {}).get("localAdminPasswordEnc")
+        if local_admin_enc:
+            # Redelivery over a survivor: the running VM booted with this
+            # password, and its throwaway replacement ISO will not boot. Minting
+            # a new one would leave the stored credential pointing at nothing —
+            # the same reason the agent token is never re-minted below.
+            local_admin_password = decrypt_secret(local_admin_enc)
+        else:
+            local_admin_password = generate_local_admin_password(vm_name)
+            local_admin_enc = encrypt_secret(local_admin_password)
+
     # Attribution is written on this FIRST upsert, not the later ``ready`` one,
     # so a clone that fails still leaves a row the admin console can group and
     # blame — an errored VM nobody can trace back to an owner is exactly the
@@ -1049,6 +1080,10 @@ def _run_clone_op(
         status="cloning",
         jobId=job_id,
         ip=ip,
+        # Written here rather than on the ``ready`` upsert for the same reason
+        # attribution is: a clone that fails leaves a VM whose console credential
+        # is still recoverable, which is exactly when someone wants to look inside.
+        **({"localAdminPasswordEnc": local_admin_enc} if local_admin_enc else {}),
     )
     try:
         with TemporaryDirectory() as tmp:
@@ -1118,11 +1153,17 @@ def _run_clone_op(
                     net=net,
                     dest_dir=Path(tmp),
                     agent=agent_bundle,
-                    # A domain controller only: the reset that makes this the
-                    # forest's domain Administrator password after promotion, and
-                    # so the credential every later domain join authenticates
-                    # with. Blank for every other template.
-                    admin_password=template_config.get(DOMAIN_ADMIN_PASSWORD_KEY, ""),
+                    # Every Windows template gets a local Administrator reset;
+                    # only the *source* differs. On a domain controller it is the
+                    # operator's password, which promotion turns into the forest's
+                    # domain Administrator password and every later domain join
+                    # authenticates with. Everywhere else it is the generated
+                    # per-VM one above, which exists for the console. Exactly one
+                    # of the two is ever non-blank; Linux templates get neither.
+                    admin_password=(
+                        template_config.get(DOMAIN_ADMIN_PASSWORD_KEY, "")
+                        or local_admin_password
+                    ),
                     # Operator-authored overrides/additions (Config ISO, PACK
                     # mode). Empty for the default path.
                     authored_scripts=[(f.name, f.content) for f in op.files],
