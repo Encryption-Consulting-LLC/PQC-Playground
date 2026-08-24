@@ -172,6 +172,29 @@ class Settings(BaseSettings):
     # this cache, so a stale entry can never reach a confirmation dialog.
     teardown_inventory_cache_s: int = 15
 
+    # Remote desktop. guacd is a local sidecar of the deploy, on the same footing
+    # as Mongo and Valkey — so its address is an env var, not a settings-document
+    # field: nothing about it is org policy an admin should be editing at runtime,
+    # and keeping it here means no new write-only secret to guard. Absent or
+    # unreachable degrades exactly one feature; the API starts either way, which
+    # is why none of this is in ``_require_secrets``.
+    guacd_host: str = "127.0.0.1"
+    guacd_port: int = 4822
+    # A console ticket is the handoff between the HTTP route that authorizes a
+    # session and the WebSocket that opens it. Single-use, and short because the
+    # browser opens the socket immediately — a long TTL only widens the window in
+    # which a leaked ticket id is worth something.
+    console_ticket_ttl_s: int = 60
+    # Concurrent relayed sessions. RDP framebuffer traffic shares the API's event
+    # loop with every agent socket (single uvicorn worker on purpose — see
+    # deploy/prod-deploy.sh), so this is a backstop against one lab's worth of
+    # open desktops starving agent dispatch.
+    console_max_sessions: int = 8
+    # Idle keepalive. An unattended desktop sends nothing, and a reverse proxy
+    # will happily reap a silent WebSocket (nginx's proxy_read_timeout defaults
+    # to 60s), which reads to the user as a session that died on its own.
+    console_keepalive_s: int = 20
+
     # LEGACY-IMAGE RECOVERY ONLY: uptime (seconds) past which a still-registered
     # FirstBootFinalize scheduled task is treated as having missed its
     # -AtStartup trigger; the worker then dispatches system.reboot. Current
