@@ -56,8 +56,11 @@ class Capability(str, Enum):
     VM_POWER = "vm:power"
     VM_DELETE = "vm:delete"
     VM_PROVISION = "vm:provision"  # run a template's role provisioning on one's own VM
+    VM_CONSOLE = "vm:console"  # open a remote-desktop session to one's own VM
     # admin cross-user VM/environment teardown (the /admin console)
     VM_TEARDOWN_ADMIN = "vm:teardown-admin"
+    # admin cross-user remote desktop (the /admin console)
+    VM_CONSOLE_ADMIN = "vm:console-admin"
     CONFIG_GENERATE = "config:generate"
     ISO_AUTHOR = "iso:author"
     VM_EXEC_ARBITRARY = "vm:exec-arbitrary"  # reserved — operator-only escape hatch
@@ -119,6 +122,15 @@ class Capability(str, Enum):
 #     platform housekeeping, and an admin with no way to do it can only watch
 #     the guest IP pool fill up. Admins still get no VM_DELETE, so the
 #     boundary-crossing surface is exactly the /admin teardown routes.
+#   VM_CONSOLE (remote desktop) is granted to operators *and* guests: a session
+#     only reaches a VM the holder could already clone, provision and destroy,
+#     and it is ownership-scoped by ``enforce_guest_vm_ownership`` exactly like
+#     VM_DELETE. It is deliberately not VM_EXEC_ARBITRARY's peer — that one is a
+#     backend-dispatched shell on any VM, this one is a screen on your own.
+#   VM_CONSOLE_ADMIN is the admin-only boundary-crossing twin, for the same
+#     reason VM_TEARDOWN_ADMIN exists: an admin diagnosing an abandoned lab
+#     before reclaiming it has no other way in. Admins hold no VM_CONSOLE, so
+#     the crossing surface is exactly the /admin console routes.
 ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
     Role.ADMIN: {
         Capability.SETTINGS_READ,
@@ -128,6 +140,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.USER_ADMIN,
         Capability.DEPLOY_ADMIN,
         Capability.VM_TEARDOWN_ADMIN,
+        Capability.VM_CONSOLE_ADMIN,
     },
     # NOTE: the admin-only set is written out twice — once granted above and
     # once subtracted here. ``test_authz_admin_capabilities`` asserts the two
@@ -142,6 +155,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.USER_ADMIN,
         Capability.DEPLOY_ADMIN,
         Capability.VM_TEARDOWN_ADMIN,
+        Capability.VM_CONSOLE_ADMIN,
     },
     Role.GUEST: {
         Capability.VM_LIST,
@@ -149,6 +163,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.VM_CLONE,
         Capability.VM_DELETE,
         Capability.VM_PROVISION,
+        Capability.VM_CONSOLE,
         Capability.DEPLOY,
         Capability.PROJECT_READ,
         Capability.PROJECT_WRITE,
