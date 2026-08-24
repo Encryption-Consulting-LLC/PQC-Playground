@@ -63,6 +63,10 @@ def project_shares_col() -> AsyncCollection:
     return get_db()["project_shares"]
 
 
+def lab_invites_col() -> AsyncCollection:
+    return get_db()["lab_invites"]
+
+
 def vm_registry_col() -> AsyncCollection:
     return get_db()["vm_registry"]
 
@@ -105,6 +109,22 @@ async def _ensure_indexes() -> None:
             IndexModel([("owner", ASCENDING), ("updatedAt", DESCENDING)]),
             # Accepted collaborators may republish a newer snapshot.
             IndexModel([("collaborators", ASCENDING)]),
+        ]
+    )
+    await lab_invites_col().create_indexes(
+        [
+            # A joiner's own labs, and the membership check the remote-desktop
+            # route makes.
+            IndexModel([("members", ASCENDING), ("revoked", ASCENDING)]),
+            # One *live* code per lab, structurally: a second mint for the same
+            # project collides instead of quietly splitting one cohort across
+            # two codes. Revoked invites drop out of the index and are kept for
+            # the record.
+            IndexModel(
+                [("projectId", ASCENDING)],
+                unique=True,
+                partialFilterExpression={"revoked": False},
+            ),
         ]
     )
     await vm_registry_col().create_indexes(

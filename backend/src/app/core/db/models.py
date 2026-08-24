@@ -127,6 +127,34 @@ class VmRegistryEntry(MongoModel):
     updated_at: int = Field(alias="updatedAt")
 
 
+class LabInviteDoc(MongoModel):
+    """One join code for a pre-deployed lab (``_id`` *is* the code).
+
+    Admin-minted (``core/labs.py``, ``routers/labs.py``), multi-use and
+    without expiry: a cohort is handed one code and everyone in it redeems the
+    same one. ``members`` is appended on each redemption and is the only record
+    of who joined — which is why ``revoked`` is what ends a cohort's access,
+    all at once, rather than a per-account edit.
+
+    ``projectId`` names the lab's saved topology and ``owner`` the account that
+    deployed it. Both are needed to decide whether a ``vm_registry`` row
+    belongs to the lab: a row written by the plan runner carries the project id
+    outright, while an older one carries only the project *code* its VM name
+    encodes, which is unique per owner and nowhere else.
+    """
+
+    project_id: str = Field(alias="projectId")
+    owner: str
+    #: What the admin console calls this lab; display only.
+    label: str | None = None
+    created_by: str = Field(alias="createdBy")
+    revoked: bool = False
+    members: list[str] = Field(default_factory=list)
+    schema_version: int = Field(default=1, alias="schemaVersion")
+    created_at: int = Field(alias="createdAt")
+    updated_at: int = Field(alias="updatedAt")
+
+
 class SettingsDoc(BaseModel):
     """The settings singleton (fixed ``_id`` — not a ``MongoModel``).
 
