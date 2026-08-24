@@ -32,7 +32,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.core.authz import (
     AuthedUser,
     Capability,
-    enforce_guest_vm_ownership,
     get_current_user,
     require_capability,
 )
@@ -41,6 +40,7 @@ from app.core.console.credentials import resolve_console_credentials
 from app.core.console.guacd import GuacdError, probe
 from app.core.console.sessions import at_capacity
 from app.core.db import vm_registry_col
+from app.core.labs import enforce_own_or_joined_vm
 from app.core.settings import settings
 
 router = APIRouter(prefix="/console", tags=["console"])
@@ -137,11 +137,8 @@ async def _mint_for(vm_name: str, user: AuthedUser) -> ConsoleTicketResponse:
 async def mint_console_ticket(
     vm_name: str, user: AuthedUser = Depends(get_current_user)
 ) -> ConsoleTicketResponse:
-    """Authorize a session on one's own VM."""
-    # A check, never a rewrite: the caller named a VM and either may see it or
-    # may not. Rewriting the name here would silently connect a guest to a
-    # different machine than the one they clicked.
-    enforce_guest_vm_ownership(vm_name, user)
+    """Authorize a session on one's own VM, or on one in a lab one has joined."""
+    await enforce_own_or_joined_vm(vm_name, user)
     return await _mint_for(vm_name, user)
 
 

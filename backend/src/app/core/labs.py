@@ -39,9 +39,15 @@ like ``core/ippool.py``.
 
 import re
 import secrets
-from typing import Any, Mapping
+from typing import TYPE_CHECKING, Any, Mapping
 
+from fastapi import HTTPException
+
+from app.core.db import lab_invites_col, vm_registry_col
 from app.core.vm_naming import project_code
+
+if TYPE_CHECKING:  # deferred: ``core.authz`` imports nothing from here
+    from app.core.authz import AuthedUser
 
 #: Unambiguous when read aloud or off a printed page: no ``I``/``L``/``O`` and
 #: no ``0``/``1``. 30 symbols, so an 8-character code is ~39 bits.
@@ -158,8 +164,6 @@ def registry_row_in_lab(
 # --------------------------------------------------------------------------- #
 async def active_invites_for_member(username: str) -> list[dict]:
     """Every live invite this account has redeemed. Revoked ones are invisible."""
-    from app.core.db import lab_invites_col
-
     cursor = lab_invites_col().find({"members": username, "revoked": False})
     return await cursor.to_list(length=MAX_JOINED_LABS)
 
@@ -178,6 +182,31 @@ async def joined_lab_project_ids(username: str) -> set[str]:
     }
 
 
+async def enforce_own_or_joined_vm(vm_name: str, user: "AuthedUser") -> None:
+    """Refuse a guest reaching a VM that is neither its own nor in a joined lab.
+
+    The remote-desktop door's reach, defined once because it is checked twice —
+    at ticket-minting time and again when the socket redeems that ticket, since
+    a ticket id is a bearer token and holding one must not be sufficient.
+
+    This lab clause is the *only* place a join code widens a guest's reach past
+    its own ``guest-<user>-`` namespace, and it is deliberate: a lab handed out
+    to be looked at whose desktops cannot be opened is not usable. Everything
+    else about that lab stays shut — delete, provision and executor commands all
+    keep the plain namespace check — so "view and remote desktop" is enforced by
+    what does *not* consult membership. Like ``enforce_guest_vm_ownership`` this
+    is a check and never a rewrite: silently redirecting the name would connect
+    the caller to a different machine than the one they clicked.
+    """
+    from app.core.authz import enforce_guest_vm_ownership
+
+    try:
+        enforce_guest_vm_ownership(vm_name, user)
+    except HTTPException:
+        if not await lab_grants_vm_access(vm_name, user.username):
+            raise
+
+
 async def lab_grants_vm_access(vm_name: str, username: str) -> bool:
     """Whether a live invite this account holds covers this VM.
 
@@ -187,8 +216,6 @@ async def lab_grants_vm_access(vm_name: str, username: str) -> bool:
     invites = await active_invites_for_member(username)
     if not invites:
         return False
-
-    from app.core.db import vm_registry_col
 
     row = await vm_registry_col().find_one(
         {"vmName": vm_name},

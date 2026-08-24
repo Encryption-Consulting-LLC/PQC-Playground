@@ -34,7 +34,7 @@ import json
 
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
-from app.core.authz import Role, enforce_guest_vm_ownership, resolve_user_token
+from app.core.authz import Role, resolve_user_token
 from app.core.console import sessions, tickets
 from app.core.console.guacd import GuacdError, connect, rdp_parameters
 from app.core.console.relay import relay
@@ -42,6 +42,7 @@ from app.core.db import now_ms, plan_runs_col
 from app.core.jobs import transport
 from app.core.jobs.models import TERMINAL_TYPES
 from app.core.jobs.replay import replay_plan_run
+from app.core.labs import enforce_own_or_joined_vm
 from app.core.settings import settings
 
 router = APIRouter(prefix="/ws", tags=["ws"])
@@ -163,8 +164,10 @@ async def console_session(
     * the caller must be a valid, still-enabled user (``resolve_user_token``
       re-reads the user document, so a disable or role change lands immediately);
     * the caller must be the user the ticket was minted for;
-    * and a guest must still own the VM — a role demotion between minting and
-      connecting has to take the session with it.
+    * and a guest must still reach the VM — its own, or one in a lab it has
+      joined (``enforce_own_or_joined_vm``, the same rule the minting route
+      applied). A role demotion, or a join code revoked in between, has to take
+      the session with it.
 
     Rejections go through ``reject`` for the reason documented at the top of this
     module: a pre-accept close is answered with a plain HTTP 403 and the
@@ -185,7 +188,7 @@ async def console_session(
         await reject(websocket, 4403)
         return
     try:
-        enforce_guest_vm_ownership(ticket.vm_name, user)
+        await enforce_own_or_joined_vm(ticket.vm_name, user)
     except HTTPException:
         await reject(websocket, 4403)
         return

@@ -26,10 +26,27 @@ os.environ.setdefault(
 from app.core.authz import AuthedUser, Role, get_current_user  # noqa: E402
 from app.core.console.guacd import GuacdError  # noqa: E402
 from app.core.secrets import encrypt_secret  # noqa: E402
+from app.core import labs  # noqa: E402
 from app.routers import console  # noqa: E402
 
 PASSWORD = "gen-Erated-24charPass1"
 GUEST_VM = "guest-alice-9e4edb-ca01"
+
+
+class _NoInvites:
+    """A ``lab_invites`` collection with nothing in it.
+
+    The remote-desktop check falls through to lab membership when the caller's
+    own namespace doesn't cover the VM (``core/labs.enforce_own_or_joined_vm``),
+    so these tests have to answer that question — "no, nobody joined anything" —
+    rather than leave it reaching for a Mongo that unit tests never start.
+    """
+
+    def find(self, _query):
+        return self
+
+    async def to_list(self, length=None):
+        return []
 
 
 def _row(**overrides):
@@ -69,6 +86,7 @@ def app(monkeypatch):
         return "tkt-123"
 
     monkeypatch.setattr(console, "vm_registry_col", lambda: _Col())
+    monkeypatch.setattr(labs, "lab_invites_col", lambda: _NoInvites())
     monkeypatch.setattr(console, "probe", _probe)
     monkeypatch.setattr(console.tickets, "mint", _mint)
     monkeypatch.setattr(console, "at_capacity", lambda: False)

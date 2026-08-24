@@ -33,6 +33,7 @@ from app.core.authz import AuthedUser, Role  # noqa: E402
 from app.core.console.credentials import ConsoleCredentials  # noqa: E402
 from app.core.console.guacd import GuacdError  # noqa: E402
 from app.core.console.tickets import ConsoleTicket  # noqa: E402
+from app.core import labs  # noqa: E402
 from app.routers import ws  # noqa: E402
 
 CREDS = ConsoleCredentials(
@@ -40,8 +41,25 @@ CREDS = ConsoleCredentials(
 )
 
 
+class _NoInvites:
+    """A ``lab_invites`` collection with nothing in it.
+
+    The remote-desktop check falls through to lab membership when the caller's
+    own namespace doesn't cover the VM (``core/labs.enforce_own_or_joined_vm``),
+    so these tests have to answer that question — "no, nobody joined anything" —
+    rather than leave it reaching for a Mongo that unit tests never start.
+    """
+
+    def find(self, _query):
+        return self
+
+    async def to_list(self, length=None):
+        return []
+
+
 @pytest.fixture
-def client() -> TestClient:
+def client(monkeypatch) -> TestClient:
+    monkeypatch.setattr(labs, "lab_invites_col", lambda: _NoInvites())
     app = FastAPI()
     app.include_router(ws.router)
     return TestClient(app)
