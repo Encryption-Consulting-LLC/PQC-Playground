@@ -18,6 +18,8 @@ change there, update the matching entry here.
 """
 
 import re
+import secrets as _secrets
+import string
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
@@ -36,6 +38,15 @@ DOMAIN_ADMIN_PASSWORD_KEY = "domainAdminPassword"
 #: this is the authoritative gate; the frontend checklist is a convenience.
 PASSWORD_MIN_LENGTH = 12
 PASSWORD_MIN_CLASSES = 3
+
+#: Symbols allowed in a *generated* local Administrator password. Deliberately
+#: narrower than the policy accepts: the value is interpolated into firstboot
+#: PowerShell by ``configgen.render_password``, so quote, backtick and ``$``
+#: cannot appear in one we mint (an operator-set password is the operator's
+#: problem, and configgen's own quoting handles it — but there is no reason to
+#: generate a value that leans on that).
+_GENERATED_PASSWORD_SYMBOLS = "-_.#%+=@"
+_GENERATED_PASSWORD_LENGTH = 24
 
 
 def password_policy_errors(value: str, vm_name: str = "") -> list[str]:
@@ -61,6 +72,37 @@ def password_policy_errors(value: str, vm_name: str = "") -> list[str]:
     if "administrator" in lowered or (len(name) >= 3 and name in lowered):
         errors.append("must not contain 'Administrator' or the machine name")
     return errors
+
+
+def generate_local_admin_password(vm_name: str = "") -> str:
+    """Mint a policy-compliant local ``Administrator`` password for *vm_name*.
+
+    Every Windows guest but a domain controller gets one of these at clone time
+    (a DC uses the operator's ``domainAdminPassword`` instead, because
+    ``Install-ADDSForest`` turns that account into the domain Administrator).
+    It exists so the remote-desktop console has a credential to sign in with:
+    a member server has no domain-wide account of its own, and a local account
+    keeps working after a domain join.
+
+    Rejection-samples against ``password_policy_errors`` rather than composing
+    one class at a time, so that function stays the *single* definition of
+    compliance — a policy change here cannot drift from the one the operator's
+    own password is held to. At 24 characters a draw failing three character
+    classes is vanishingly rare and failing the machine-name check rarer still,
+    so exhausting the attempts means the policy and the alphabet have stopped
+    agreeing — a bug worth raising rather than papering over.
+    """
+    alphabet = string.ascii_letters + string.digits + _GENERATED_PASSWORD_SYMBOLS
+    for _ in range(64):
+        value = "".join(
+            _secrets.choice(alphabet) for _ in range(_GENERATED_PASSWORD_LENGTH)
+        )
+        if not password_policy_errors(value, vm_name):
+            return value
+    raise RuntimeError(
+        "Could not generate a policy-compliant local Administrator password — "
+        "the generator's alphabet and password_policy_errors disagree."
+    )
 
 
 # Free-text value shapes. Deliberately strict: these values are later

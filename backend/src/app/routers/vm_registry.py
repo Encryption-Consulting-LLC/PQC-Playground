@@ -42,13 +42,26 @@ class VmRegistryUpsert(BaseModel):
     power_state: str | None = Field(default=None, alias="powerState")
     job_id: str | None = Field(default=None, alias="jobId")
     ip: str | None = None
+    # Deliberately absent: ``localAdminPasswordEnc``. It is server-written (by the
+    # clone task, from the password firstboot actually applied), so accepting one
+    # here would let a REGISTRY_WRITE holder plant a credential the guest never
+    # had — and the console would then hand it to guacd.
 
 
 @router.get("", dependencies=[Depends(require_capability(Capability.REGISTRY_READ))])
 async def list_entries(project_id: str | None = None) -> dict:
     """Full entries (they're tiny), optionally filtered to one project."""
     query = {"projectId": project_id} if project_id is not None else {}
-    cursor = vm_registry_col().find(query).sort("updatedAt", -1)
+    # ``localAdminPasswordEnc`` is projected away rather than filtered after the
+    # fact: it is a guest's console credential, and the only code with any reason
+    # to read it is ``core.console.credentials`` on the way to guacd. It is
+    # ciphertext, not plaintext, but a registry listing has no business carrying
+    # it to a browser at all.
+    cursor = (
+        vm_registry_col()
+        .find(query, {"localAdminPasswordEnc": 0})
+        .sort("updatedAt", -1)
+    )
     docs = await cursor.to_list(length=500)
     return {"entries": [from_mongo(d) for d in docs], "count": len(docs)}
 
