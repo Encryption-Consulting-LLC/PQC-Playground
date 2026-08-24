@@ -31,6 +31,11 @@ export const URLS = {
     powerOn: (name: string) => `/vm/${encodeURIComponent(name)}/power-on`,
     powerOff: (name: string) => `/vm/${encodeURIComponent(name)}/power-off`,
   },
+  console: {
+    // Authorizes a remote-desktop session and returns a single-use ticket. The
+    // credentials never come back with it — they go straight to guacd.
+    ticket: (vmName: string) => `/console/${encodeURIComponent(vmName)}`,
+  },
   deploy: {
     root: "/deploy",
     compile: "/deploy/compile",
@@ -68,5 +73,9 @@ export const URLS = {
   ws: {
     jobs: (id: string) => `/ws/jobs/${encodeURIComponent(id)}`,
     agents: "/executor/agents/watch",
+    // Redeems a console ticket and carries the Guacamole protocol. Handed to
+    // guacamole-common-js's own tunnel rather than `lib/ws.ts`.
+    console: (ticketId: string) =>
+      `/ws/console/${encodeURIComponent(ticketId)}`,
   },
 } as const

@@ -441,6 +441,32 @@ export const cloneVm = (req: CloneRequest) =>
 export const deleteVm = (name: string) =>
   request<JobAccepted>(URLS.vm.one(name), { method: "DELETE" })
 
+// --- /console ----------------------------------------------------------------
+
+/** A one-shot authorization to open a remote-desktop session.
+ *
+ * Note what is *not* here: the RDP username, the password, and the guest's
+ * address. The backend keeps all three and hands them to guacd itself, so the
+ * browser only ever holds an opaque ticket id. `credentialLabel` is display text
+ * (e.g. `ENCON\Administrator`) so the panel can say who the session signs in
+ * as without the client holding the credential. */
+export interface ConsoleTicket {
+  ticketId: string
+  vmName: string
+  credentialLabel: string
+  expiresInSeconds: number
+}
+
+/** Authorize a session on `vmName`. Single-use and short-lived — a reconnect
+ * mints a fresh one rather than reusing this, so authorization is re-checked.
+ *
+ * Meaningful failures (all `ApiError`): 404 the VM is unknown (or, for a guest,
+ * outside their namespace), 409 no session is possible and `detail` says why
+ * (still cloning / no address / no stored credential → redeploy), 503 guacd is
+ * unreachable or every session slot is in use. */
+export const mintConsoleTicket = (vmName: string) =>
+  request<ConsoleTicket>(URLS.console.ticket(vmName), { method: "POST" })
+
 // --- /deploy -----------------------------------------------------------------
 
 /** One operator-authored firstboot script riding inline in a createVm op. */

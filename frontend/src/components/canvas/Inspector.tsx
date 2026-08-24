@@ -46,6 +46,7 @@ import { CAPABILITIES } from "@/constants/auth"
 import { useCan } from "@/hooks/useCan"
 import { useIsOperator } from "@/hooks/useIsOperator"
 import { useAgentConnected } from "@/hooks/useAgentConnected"
+import { RemoteDesktopPanel } from "@/components/canvas/RemoteDesktopPanel"
 import { dispatchExecutorCommand } from "@/lib/api"
 import { openJobSocket } from "@/lib/ws"
 import { Badge } from "@/components/ui/badge"
@@ -552,6 +553,7 @@ export function Inspector() {
   const canPower = useCan(CAPABILITIES.vmPower)
   const canUpdate = useCan(CAPABILITIES.vmUpdate)
   const canRead = useCan(CAPABILITIES.vmRead)
+  const canConsole = useCan(CAPABILITIES.vmConsole)
   const isOperator = useIsOperator()
   const deploying = useStagingStore((s) => s.deploying)
   const ops = useStagingStore((s) => s.ops)
@@ -1112,6 +1114,13 @@ export function Inspector() {
             </div>
           </section>
         )}
+
+        {/* Remote desktop — offered to every canvas role, unlike the Executor
+            panel below: a session only reaches a VM the holder could already
+            deploy and destroy, and the backend scopes it to the caller's own
+            VMs. The panel hides itself when the node has no real VM, no address,
+            or is a Linux template. */}
+        {isConfigured && canConsole && <RemoteDesktopPanel nodeId={nodeId} />}
 
         {/* Executor phone-home: manual agent correlation + live hostname/IP/cert
             actions. Operator-only — raw vm_id/token correlation and agent commands
