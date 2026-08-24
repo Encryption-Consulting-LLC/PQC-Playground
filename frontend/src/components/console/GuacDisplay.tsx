@@ -15,6 +15,16 @@
  *
  * Two details that are easy to get wrong and silent when wrong:
  *
+ * - "Connected" is `Client.State.CONNECTED`, not tunnel-open. The tunnel opens
+ *   as soon as guacd accepts the session, which it does *before* it has reached
+ *   the guest at all — verified against guacd 1.5.0, which answers `ready` for a
+ *   host that is not there and then simply waits. Reporting the tunnel as
+ *   connected therefore shows a black screen for a powered-off VM with no
+ *   explanation. The client reaches `CONNECTED` on its first `sync`, which means
+ *   real frames.
+ * - There is no RDP connect timeout in the Guacamole protocol (guacd 1.5.0
+ *   exposes none among its 81 RDP parameters), so the deadline below is the only
+ *   thing that turns an unreachable guest into a message instead of a hang.
  * - The keyboard is attached to `document`, because a desktop needs modifiers and
  *   arrow keys that never reach a focused div. It *must* be detached on unmount,
  *   or it keeps swallowing keystrokes — including the canvas's own Ctrl+Z undo
@@ -29,6 +39,15 @@ import { useEffect, useRef } from "react"
 
 /** X11 keysyms for the one key combination a browser will never deliver. */
 const CTRL_ALT_DEL = [0xffe3, 0xffe9, 0xffff] as const
+
+/** `Guacamole.Client.State` members this component reacts to. */
+const CLIENT_CONNECTED = 3
+const CLIENT_DISCONNECTED = 5
+
+/** How long the guest has to produce its first frame before we say so.
+ * Generous: a VM still finishing its first boot legitimately takes a while to
+ * answer on 3389. */
+const CONNECT_DEADLINE_MS = 45_000
 
 export interface GuacDisplayProps {
   /** Absolute `ws(s)://` URL, *without* a query string — the library appends one. */
@@ -99,21 +118,42 @@ export function GuacDisplay({
     }
 
     let settled = false
-    client.onerror = (status) => {
+    const settle = (report: () => void) => {
+      if (settled) return
       settled = true
-      handlers.current.onError?.(status.message || "The session ended.")
+      window.clearTimeout(deadline)
+      report()
     }
-    tunnel.onerror = (status) => {
-      settled = true
-      handlers.current.onError?.(status.message || "The connection failed.")
-    }
-    // Tunnel state 2 is OPEN — set on the first instruction, which the backend
-    // guarantees is the tunnel UUID frame.
-    tunnel.onstatechange = (state) => {
-      if (state === 2) handlers.current.onConnected?.()
-      // 3 is CLOSED. A close without a prior error is the ordinary ending: the
-      // user closed the overlay, the guest logged out, or the VM was torn down.
-      if (state === 3 && !settled) handlers.current.onDisconnected?.(undefined)
+
+    const deadline = window.setTimeout(
+      () =>
+        settle(() =>
+          handlers.current.onError?.(
+            "The guest did not respond. It may be powered off, still booting, or unreachable on the lab network.",
+          ),
+        ),
+      CONNECT_DEADLINE_MS,
+    )
+
+    client.onerror = (status) =>
+      settle(() =>
+        handlers.current.onError?.(status.message || "The session ended."),
+      )
+    tunnel.onerror = (status) =>
+      settle(() =>
+        handlers.current.onError?.(status.message || "The connection failed."),
+      )
+    client.onstatechange = (state) => {
+      if (state === CLIENT_CONNECTED) {
+        // First `sync` — the guest is actually painting.
+        window.clearTimeout(deadline)
+        handlers.current.onConnected?.()
+      }
+      // A disconnect with no prior error is the ordinary ending: the user closed
+      // the overlay, signed out inside the guest, or the VM was torn down.
+      if (state === CLIENT_DISCONNECTED) {
+        settle(() => handlers.current.onDisconnected?.(undefined))
+      }
     }
 
     // Resize the guest to match the viewport. `resize-method=display-update` on
@@ -140,9 +180,10 @@ export function GuacDisplay({
       mouse.onmousedown = null
       mouse.onmouseup = null
       mouse.onmousemove = null
+      window.clearTimeout(deadline)
       client.onerror = null
+      client.onstatechange = null
       tunnel.onerror = null
-      tunnel.onstatechange = null
       if (actionsRef) actionsRef.current = null
       try {
         client.disconnect()
