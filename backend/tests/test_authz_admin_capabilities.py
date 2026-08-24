@@ -39,3 +39,14 @@ def test_cross_user_teardown_is_admin_only_and_distinct_from_vm_delete():
     assert Capability.VM_DELETE not in ROLE_CAPABILITIES[Role.ADMIN]
     assert Capability.VM_TEARDOWN_ADMIN not in ROLE_CAPABILITIES[Role.OPERATOR]
     assert Capability.VM_TEARDOWN_ADMIN not in ROLE_CAPABILITIES[Role.GUEST]
+
+
+def test_lab_join_is_a_canvas_capability_and_issuing_is_admin_only():
+    # The two halves of a join code: guests and operators redeem one, only an
+    # admin hands one out. Reversing either is how a lab meant for one cohort
+    # becomes self-serve.
+    assert Capability.LAB_JOIN in ROLE_CAPABILITIES[Role.GUEST]
+    assert Capability.LAB_JOIN in ROLE_CAPABILITIES[Role.OPERATOR]
+    assert Capability.LAB_ADMIN in ROLE_CAPABILITIES[Role.ADMIN]
+    assert Capability.LAB_ADMIN not in ROLE_CAPABILITIES[Role.OPERATOR]
+    assert Capability.LAB_ADMIN not in ROLE_CAPABILITIES[Role.GUEST]

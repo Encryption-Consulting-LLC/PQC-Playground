@@ -61,6 +61,9 @@ class Capability(str, Enum):
     VM_TEARDOWN_ADMIN = "vm:teardown-admin"
     # admin cross-user remote desktop (the /admin console)
     VM_CONSOLE_ADMIN = "vm:console-admin"
+    LAB_JOIN = "lab:join"  # redeem a join code for a pre-deployed lab
+    # admin issue/revoke of those join codes (the /admin console)
+    LAB_ADMIN = "lab:admin"
     CONFIG_GENERATE = "config:generate"
     ISO_AUTHOR = "iso:author"
     VM_EXEC_ARBITRARY = "vm:exec-arbitrary"  # reserved — operator-only escape hatch
@@ -127,6 +130,16 @@ class Capability(str, Enum):
 #     and it is ownership-scoped by ``enforce_guest_vm_ownership`` exactly like
 #     VM_DELETE. It is deliberately not VM_EXEC_ARBITRARY's peer — that one is a
 #     backend-dispatched shell on any VM, this one is a screen on your own.
+#   LAB_JOIN is guest-eligible and is the whole point of join codes: an admin
+#     builds a lab, hands its code to the people it was built for, and they
+#     redeem it to see that already-deployed topology and open its desktops.
+#     It grants no build surface — a joined lab is view + remote desktop, and
+#     the VM routes' own-namespace checks are what keep it that way. Operators
+#     hold it too, so whoever prepared a lab can redeem the code the cohort
+#     was given and see exactly what they see.
+#   LAB_ADMIN is the admin-only issuing side: minting a code hands strangers a
+#     view of somebody else's VMs, which is a platform decision, not something
+#     the account that happens to own the project decides.
 #   VM_CONSOLE_ADMIN is the admin-only boundary-crossing twin, for the same
 #     reason VM_TEARDOWN_ADMIN exists: an admin diagnosing an abandoned lab
 #     before reclaiming it has no other way in. Admins hold no VM_CONSOLE, so
@@ -141,6 +154,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.DEPLOY_ADMIN,
         Capability.VM_TEARDOWN_ADMIN,
         Capability.VM_CONSOLE_ADMIN,
+        Capability.LAB_ADMIN,
     },
     # NOTE: the admin-only set is written out twice — once granted above and
     # once subtracted here. ``test_authz_admin_capabilities`` asserts the two
@@ -156,6 +170,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.DEPLOY_ADMIN,
         Capability.VM_TEARDOWN_ADMIN,
         Capability.VM_CONSOLE_ADMIN,
+        Capability.LAB_ADMIN,
     },
     Role.GUEST: {
         Capability.VM_LIST,
@@ -164,6 +179,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.VM_DELETE,
         Capability.VM_PROVISION,
         Capability.VM_CONSOLE,
+        Capability.LAB_JOIN,
         Capability.DEPLOY,
         Capability.PROJECT_READ,
         Capability.PROJECT_WRITE,
