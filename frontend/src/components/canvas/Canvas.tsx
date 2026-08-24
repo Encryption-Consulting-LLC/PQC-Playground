@@ -748,6 +748,9 @@ export function Canvas() {
         proOptions={{ hideAttribution: true }}
         nodesDraggable={!readOnly && !evidenceActive}
         nodesConnectable={!readOnly && !evidenceActive}
+        // Selection stays live in a joined lab on purpose: picking a machine is
+        // how its inspector — and so its remote desktop — is reached, which is
+        // the whole of what a joined lab offers.
         elementsSelectable={!deploying && !evidenceActive}
       >
         <DomainRegions preview={domainDragPreview} />

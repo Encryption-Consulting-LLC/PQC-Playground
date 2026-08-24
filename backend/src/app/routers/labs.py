@@ -113,8 +113,16 @@ async def _snapshot_source(project_id: str) -> dict | None:
         return {"project": doc, "owner": doc.get("owner"), "source": "project"}
     share = await project_shares_col().find_one({"_id": project_id})
     if share is not None:
+        # A share's stored ``project`` is a client payload, which carries no
+        # timestamps of its own (``ProjectIn`` drops them and the server stamps
+        # the envelope instead). Lift the envelope's, so a joined lab's tab has
+        # the same fields as one sourced from ``projects``.
         return {
-            "project": share.get("project") or {},
+            "project": {
+                **(share.get("project") or {}),
+                "createdAt": share.get("createdAt"),
+                "updatedAt": share.get("updatedAt"),
+            },
             "owner": share.get("owner"),
             "source": "share",
         }

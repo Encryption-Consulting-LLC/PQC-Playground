@@ -50,6 +50,7 @@ function App() {
   const canProjects =
     !!me?.capabilities.includes(CAPABILITIES.projectRead) &&
     !!me?.capabilities.includes(CAPABILITIES.projectWrite)
+  const canJoinLabs = !!me?.capabilities.includes(CAPABILITIES.labJoin)
   const syncStatus = useProjectSyncStore((s) => s.status)
   const syncError = useProjectSyncStore((s) => s.loadError)
   const initializedSession = useRef<string | null>(null)
@@ -76,8 +77,10 @@ function App() {
     const init = canProjects
       ? initServerProjects(me.username)
       : initLocalProjects(me.username)
-    void init.then(() => restoreJoinedLabs())
-  }, [sessionReady, token, me, canProjects])
+    void init.then(() => {
+      if (canJoinLabs) void restoreJoinedLabs()
+    })
+  }, [sessionReady, token, me, canProjects, canJoinLabs])
 
   if (!token) return <LoginForm />
 
