@@ -11,7 +11,8 @@ and retain recovery and verification evidence.
 - A drag-and-drop topology canvas with domain regions, typed PKI connections,
   staged changes, compiler guidance, certificate-journey and evidence views.
 - Empty projects, a preconfigured PKI project template, autosave, multi-project
-  tabs, and guest-to-guest project sharing.
+  tabs, guest-to-guest project sharing, and join codes that hand an
+  already-deployed lab to the people it was built for.
 - Local username/password authentication, optional OIDC SSO, and server-side
   operator/guest capability enforcement.
 - Operator-managed ESXi, golden-image, per-role sizing, guest-network, and IP
