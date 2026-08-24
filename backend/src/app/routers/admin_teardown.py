@@ -50,6 +50,7 @@ from starlette.concurrency import run_in_threadpool
 from vmkit.esxi import list_vm_names
 
 from app.core import agents
+from app.core.console.sessions import revoke_live_console_sockets
 from app.core.authz import AuthedUser, Capability, get_current_user, require_capability
 from app.core.db import ip_pool_col, projects_col, users_col, vm_registry_col
 from app.core.environments import (
@@ -332,9 +333,12 @@ async def start_teardown(
             ),
         )
 
-    # Cut the agents loose first: a VM must not keep taking commands while it
-    # is being destroyed. Runs here because the live socket map is per-process.
+    # Cut the live sockets loose first: a VM must not keep taking commands while
+    # it is being destroyed, and an open remote-desktop session must not outlive
+    # the machine it is showing. Runs here because both socket maps are
+    # per-process.
     await agents.revoke_live_agent_sockets(body.vm_names)
+    await revoke_live_console_sockets(body.vm_names)
 
     job_id = uuid.uuid4().hex
     logger.info(
