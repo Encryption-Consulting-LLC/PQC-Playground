@@ -52,6 +52,7 @@ from app.core.golden_image import (
     golden_image_config_from_doc,
 )
 from app.core.ippool import guest_network_from_doc
+from app.core.labs import joined_lab_project_ids
 from app.core.infrastructure import (
     LINUX_PRODUCT_BASE,
     LINUX_PRODUCT_TEMPLATES,
@@ -138,9 +139,10 @@ class DeployRequest(BaseModel):
     #: The project the canvas belongs to. For guests it supplies the ``<project>``
     #: segment of every derived VM name (``guest-<user>-<project>-<machine>``) and
     #: is required when the plan clones. Operators keep free-form names and ignore
-    #: it. It's a naming/organisation segment only — the name stays inside the
-    #: caller's ``guest-<user>-`` namespace regardless, so it needs no membership
-    #: check (guests have no server-side project records today).
+    #: it. As a *name* it needs no membership check — the result stays inside the
+    #: caller's own ``guest-<user>-`` namespace regardless — but the deploy route
+    #: still refuses a project the caller only holds a join code for; see
+    #: ``_refuse_joined_lab_deploy``.
     project_id: str | None = Field(default=None, alias="projectId")
 
 
@@ -495,6 +497,30 @@ async def compile_deploy(
     return _compiled_response(req, compiled, settings_doc)
 
 
+async def _refuse_joined_lab_deploy(project_id: str | None, user: AuthedUser) -> None:
+    """403 a deploy aimed at a lab the caller merely joined.
+
+    A join code grants a finished environment to look at and open desktops in,
+    not a canvas to build on. Nothing unsafe would happen without this — a
+    guest's clone names are rebuilt from their own identity, so the VMs would
+    be theirs — but they would be filed under somebody else's lab, show up in
+    that lab's environment group, and eat pool addresses the lab's owner never
+    asked for. Owning the project is unaffected: ``joined_lab_project_ids``
+    excludes labs the caller owns, so holding a code for your own lab changes
+    nothing.
+    """
+    if not project_id:
+        return
+    if project_id in await joined_lab_project_ids(user.username):
+        raise HTTPException(
+            403,
+            detail=(
+                "This lab was deployed for you to explore. Create your own "
+                "project to build and deploy a topology."
+            ),
+        )
+
+
 @router.post(
     "",
     status_code=202,
@@ -515,6 +541,7 @@ async def deploy(
         start_plan_task,
     )  # local import: avoids loading Celery for every route
 
+    await _refuse_joined_lab_deploy(req.project_id, user)
     compiled = _compile_or_422(req)
     # From this point forward, every check and the queued worker payload sees
     # only backend-derived dependencies/order. Client dependsOn never survives.
