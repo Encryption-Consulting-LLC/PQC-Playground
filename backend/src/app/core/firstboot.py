@@ -98,7 +98,7 @@ _RDP_ENABLE_SCRIPT = (
 #: The Windows built-in local administrator. ``Install-ADDSForest`` carries *this*
 #: account's password into the new forest as the built-in **domain** Administrator
 #: password — the credential every later step signs in with as
-#: ``<NETBIOS>\Administrator`` (``core.sequences.definitions._admin_username``).
+#: ``<NETBIOS>\Administrator`` (``core.sequences.definitions.admin_username``).
 #: Hardcoded on purpose: the inheritance is specific to the builtin, so pointing
 #: this at another local account would silently produce an unjoinable domain.
 LOCAL_ADMIN_ACCOUNT = "Administrator"

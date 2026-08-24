@@ -111,7 +111,13 @@ _SERVER_MANAGER_STALL = (
 _FEATURE_RETRY = (60, 180, 300)
 
 
-def _admin_username(netbios: str | None) -> str:
+def admin_username(netbios: str | None) -> str:
+    """The account every step inside a promoted domain authenticates as.
+
+    Public because the remote-desktop console resolves the *same* credential for
+    a domain controller's session (``core.console.credentials``) — one formatter,
+    so a session and a ``domain.join`` can never disagree about who they are.
+    """
     return f"{netbios}\\Administrator" if netbios else "Administrator"
 
 
@@ -573,7 +579,7 @@ def _domain_join_sequence(ctx: RunContext) -> list[Step]:
     def join_params(rt: StepRuntime) -> dict[str, str]:
         return {
             "domainName": ctx.domain_name or "",
-            "username": _admin_username(ctx.netbios),
+            "username": admin_username(ctx.netbios),
             "password": dc.template_config.get("domainAdminPassword", ""),
         }
 
@@ -685,7 +691,7 @@ def _domain_leave_sequence(ctx: RunContext) -> list[Step]:
     def leave_params(rt: StepRuntime) -> dict[str, str]:
         return {
             "workgroup": "WORKGROUP",
-            "username": _admin_username(ctx.netbios),
+            "username": admin_username(ctx.netbios),
             "password": dc.template_config.get("domainAdminPassword", ""),
         }
 
@@ -1048,7 +1054,7 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
         cfg["caType"] = "Issuing"
         cfg["csrPath"] = _CSR
         dc = ctx.nodes.get(DC)
-        cfg["username"] = _admin_username(ctx.netbios)
+        cfg["username"] = admin_username(ctx.netbios)
         cfg["password"] = (
             dc.template_config.get("domainAdminPassword", "") if dc else ""
         )
@@ -1058,7 +1064,7 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
         dc = ctx.nodes.get(DC)
         params = {
             "certPath": _ISSUING_CRT,
-            "username": _admin_username(ctx.netbios),
+            "username": admin_username(ctx.netbios),
             "password": (
                 dc.template_config.get("domainAdminPassword", "") if dc else ""
             ),
@@ -1090,7 +1096,7 @@ def _ca_connect_sequence(ctx: RunContext) -> list[Step]:
             return {
                 "template": template,
                 "computer": ctx.node(WEB).hostname,
-                "username": _admin_username(ctx.netbios),
+                "username": admin_username(ctx.netbios),
                 "password": password,
             }
 
