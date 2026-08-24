@@ -229,9 +229,15 @@ def test_connect_sends_values_positionally_against_the_args_guacd_replied_with(
     )
 
     assert conn.connection_id == "$abc123"
-    connect_instruction = guacd.received[-1]
-    assert decode(connect_instruction) == [
+    # The version token is answered by echoing it, not by omitting it — it holds
+    # a positional slot like any other argument. Skipping it sends one value too
+    # few, and guacd's punishment for that is uniquely misleading: it replies
+    # `ready` and *then* drops the connection with "Client did not return the
+    # expected number of arguments", so the handshake looks like it worked and
+    # the session dies a moment later. Verified against guacd 1.5.0.
+    assert decode(guacd.received[-1]) == [
         "connect",
+        "VERSION_1_5_0",
         "192.0.2.10",
         "3389",
         ".\\Administrator",
@@ -260,6 +266,7 @@ def test_connect_sends_an_empty_value_for_an_arg_it_has_no_parameter_for(monkeyp
 
     assert decode(guacd.received[-1]) == [
         "connect",
+        "VERSION_1_5_0",
         "192.0.2.10",
         "",
         "3389",
@@ -288,10 +295,14 @@ def test_handshake_order_is_select_size_media_connect(monkeypatch):
     assert opcodes == ["select", "size", "audio", "video", "image", "connect"]
 
 
-def test_a_refused_login_is_an_error_not_a_hung_session(monkeypatch):
-    """guacd reports a rejected RDP login as an ``error`` instruction in place of
-    ``ready``. Surfacing it is the difference between "wrong password" and a
-    blank overlay that never resolves."""
+def test_an_error_in_place_of_ready_is_raised_not_ignored(monkeypatch):
+    """guacd answers a handshake it cannot act on with ``error`` instead of
+    ``ready``. Surfacing it is the difference between a stated reason and a blank
+    overlay that never resolves.
+
+    This is *not* the powered-off-guest case: guacd answers ``ready`` before it
+    has reached the guest, so that one is caught by the browser's connect
+    deadline instead."""
 
     guacd = _FakeGuacd(["hostname"], ready=False)
     _patched_open(guacd, monkeypatch)
@@ -347,3 +358,30 @@ def test_rdp_parameters_carry_the_lab_defaults():
     assert params["resize-method"] == "display-update"
     # Framebuffer traffic shares the API's event loop with every agent socket.
     assert params["enable-wallpaper"] == "false"
+
+
+def test_connect_sends_exactly_one_value_per_arg_guacd_listed(monkeypatch):
+    """The invariant behind both cases above, stated directly.
+
+    guacd 1.5.0 lists 82 elements for RDP, so an off-by-one here is invisible by
+    inspection — and it is the failure mode that produces a `ready` followed by a
+    dead session rather than an honest error."""
+
+    names = ["hostname", "port", *(f"arg{i}" for i in range(60))]
+    guacd = _FakeGuacd(names)
+    _patched_open(guacd, monkeypatch)
+
+    asyncio.run(
+        connect(
+            host="127.0.0.1",
+            port=4822,
+            protocol="rdp",
+            parameters={"hostname": "192.0.2.10", "port": "3389"},
+            width=1024,
+            height=768,
+        )
+    )
+
+    sent = decode(guacd.received[-1])
+    # opcode + version + every listed name.
+    assert len(sent) - 1 == len(names) + 1

@@ -29,11 +29,13 @@ guacd's is fixed and order-dependent::
     →  connect,<v1>,<v2>,...      positional, aligned to `args`
     ←  ready,$<connection-id>
 
-The ``connect`` values are positional: element *i* answers the parameter named at
-``args[i]``, with ``args[0]`` skipped because it is guacd's version token, not a
-parameter. So the parameter map is resolved *against the arg list guacd sent*
-rather than a list hardcoded here — that is what makes this work across guacd
-versions that added parameters.
+The ``connect`` values are positional: element *i* answers ``args[i]``. That
+includes ``args[0]``, the version token, which is answered by echoing it back —
+*not* by omitting it, even though it is not a parameter. The parameter map is
+resolved against the arg list guacd actually sent rather than a list hardcoded
+here, which is what makes this work across guacd versions: 1.5.0 lists 82
+elements for RDP, so a hardcoded order would be both unreadable and
+version-locked.
 
 After ``ready`` neither side interprets anything: instructions are forwarded
 verbatim in both directions.
@@ -53,13 +55,22 @@ here and never forwarded.
 """
 
 import asyncio
+import re
 from collections.abc import Iterable, Sequence
 
 #: Opcode reserved by guacamole-common-js for tunnel-level messages.
 INTERNAL_OPCODE = ""
 
-#: guacd's reply to ``select`` starts with its version, not a parameter name.
-_ARGS_VERSION_ELEMENTS = 1
+#: The protocol-version token guacd leads its ``args`` list with. It occupies a
+#: *positional slot* like any other argument, and the client answers it by echoing
+#: the version back rather than by skipping it — so ``connect`` carries one value
+#: per element of ``args``, version included. Dropping it instead (which reads
+#: like the obvious thing to do, since it is not a parameter) sends one value too
+#: few. guacd answers ``ready`` anyway and *then* kills the connection with
+#: "Client did not return the expected number of arguments", so the handshake
+#: appears to succeed and the session dies immediately afterwards. Verified
+#: against guacd 1.5.0, which lists 82 elements for RDP.
+_VERSION_TOKEN = re.compile(r"^VERSION_\d+_\d+_\d+$")
 
 #: Read cap for a single instruction. Generous — a clipboard blob or a large
 #: image update is legitimately big — but not unbounded: without a ceiling a peer
@@ -261,7 +272,7 @@ async def connect(
         reply = await asyncio.wait_for(conn.read_instruction(), timeout=timeout)
         if not reply or reply[0] != "args":
             raise GuacdError(f"Expected 'args' from guacd, got {reply[:1]}.")
-        arg_names = reply[1 + _ARGS_VERSION_ELEMENTS :]
+        arg_names = reply[1:]
 
         await conn.send(["size", str(width), str(height), str(dpi)])
         # Empty mimetype lists: audio, video and printing are out of scope, and
@@ -271,14 +282,35 @@ async def connect(
         await conn.send(["video"])
         await conn.send(["image"])
 
-        await conn.send(["connect", *(parameters.get(name, "") for name in arg_names)])
+        # One value per arg, in guacd's order. The version token is answered by
+        # echoing it back (that is how the version is negotiated); anything we
+        # have no parameter for is answered empty, so a guacd that adds an
+        # argument does not shift every later value into the wrong slot.
+        await conn.send(
+            [
+                "connect",
+                *(
+                    name if _VERSION_TOKEN.match(name) else parameters.get(name, "")
+                    for name in arg_names
+                ),
+            ]
+        )
 
         ready = await asyncio.wait_for(conn.read_instruction(), timeout=timeout)
         if not ready or ready[0] != "ready":
-            # guacd reports a refused RDP login as an `error` instruction here,
-            # so this is the branch a wrong password lands in.
+            # guacd answers an instruction it cannot act on at all (an unknown
+            # protocol, a malformed handshake) with `error` in place of `ready`.
             detail = ",".join(ready[1:]) if len(ready) > 1 else "no detail"
             raise GuacdError(f"guacd did not become ready ({detail}).")
+
+        # Note what `ready` does *not* mean. Verified against guacd 1.5.0: it
+        # answers `ready` before it has reached the guest at all, and a host that
+        # is not there produces no error instruction — guacd simply waits, and
+        # there is no RDP connect timeout among its 81 parameters to bound that
+        # with. So a powered-off VM cannot be detected here; the browser side
+        # holds the deadline, keyed on the client reaching CONNECTED (its first
+        # `sync`, i.e. real frames) rather than on the tunnel opening.
+        # See `frontend/src/components/console/GuacDisplay.tsx`.
         conn.connection_id = ready[1] if len(ready) > 1 else None
         return conn
     except GuacdError, TimeoutError:
