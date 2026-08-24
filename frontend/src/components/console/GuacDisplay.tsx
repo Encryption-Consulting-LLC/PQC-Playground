@@ -6,10 +6,12 @@
  * (contrast `lib/ws.ts`, which is small enough that the two apps' copies have
  * deliberately diverged).
  *
- * This component owns the imperative Guacamole objects and nothing else. It takes
- * a ticket id and a token, dials the tunnel, and reports state upward; the caller
- * owns the ticket lifecycle, because a ticket is single-use and a reconnect is
- * therefore a fresh authorization rather than a socket retry.
+ * This component owns the imperative Guacamole objects and nothing else. It is
+ * handed a fully-resolved tunnel URL and the query data to dial it with, so its
+ * only imports are React and the Guacamole library — no `@/` paths, which is
+ * what lets one file serve two apps whose `@` alias points at different trees.
+ * The caller owns the ticket lifecycle, because a ticket is single-use and a
+ * reconnect is therefore a fresh authorization rather than a socket retry.
  *
  * Two details that are easy to get wrong and silent when wrong:
  *
@@ -18,21 +20,21 @@
  *   or it keeps swallowing keystrokes — including the canvas's own Ctrl+Z undo
  *   handler — after the overlay is gone.
  * - `WebSocketTunnel.connect(data)` builds its socket as `` `${url}?${data}` ``,
- *   so the token rides in `data` and the URL must carry no query string of its
- *   own (see `lib/ws.ts::consoleTunnelUrl`).
+ *   so the token rides in `tunnelData` and `tunnelUrl` must carry no query string
+ *   of its own (each app's `lib/ws.ts` has the helpers that honour this).
  */
 
 import Guacamole from "guacamole-common-js"
 import { useEffect, useRef } from "react"
 
-import { consoleTunnelData, consoleTunnelUrl } from "@/lib/ws"
-
 /** X11 keysyms for the one key combination a browser will never deliver. */
 const CTRL_ALT_DEL = [0xffe3, 0xffe9, 0xffff] as const
 
 export interface GuacDisplayProps {
-  ticketId: string
-  token: string | null | undefined
+  /** Absolute `ws(s)://` URL, *without* a query string — the library appends one. */
+  tunnelUrl: string
+  /** Query string the library appends, e.g. `token=…`. */
+  tunnelData: string
   /** Called once the tunnel is open and the first frame is on its way. */
   onConnected?: () => void
   /** Terminal failure, already phrased for a person. */
@@ -44,8 +46,8 @@ export interface GuacDisplayProps {
 }
 
 export function GuacDisplay({
-  ticketId,
-  token,
+  tunnelUrl,
+  tunnelData,
   onConnected,
   onError,
   onDisconnected,
@@ -66,7 +68,7 @@ export function GuacDisplay({
     const container = containerRef.current
     if (!container) return
 
-    const tunnel = new Guacamole.WebSocketTunnel(consoleTunnelUrl(ticketId))
+    const tunnel = new Guacamole.WebSocketTunnel(tunnelUrl)
     const client = new Guacamole.Client(tunnel)
     const display = client.getDisplay()
     const element = display.getElement()
@@ -126,7 +128,7 @@ export function GuacDisplay({
     const observer = new ResizeObserver(resize)
     observer.observe(container)
 
-    client.connect(consoleTunnelData(token))
+    client.connect(tunnelData)
 
     return () => {
       observer.disconnect()
@@ -149,9 +151,9 @@ export function GuacDisplay({
       }
       element.remove()
     }
-    // `ticketId` is the identity of a session: a new ticket means a new dial,
-    // and nothing else here should cause one.
-  }, [ticketId, token, actionsRef])
+    // `tunnelUrl` carries the ticket id, so it *is* the identity of a session:
+    // a new URL means a new dial, and nothing else here should cause one.
+  }, [tunnelUrl, tunnelData, actionsRef])
 
   return (
     <div

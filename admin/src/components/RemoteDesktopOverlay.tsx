@@ -1,24 +1,22 @@
 /**
- * The full-screen remote-desktop overlay.
+ * The full-screen remote-desktop overlay (admin console).
  *
- * Shell copied from `DeployCompilerDialog` — the app's only large-canvas dialog —
- * and widened to the whole viewport, because a desktop scaled into a 1180px box
- * is unreadable at the resolutions these guests boot at.
- *
- * Mounted once in `Workspace`, driven entirely by `store/console`. Rendering is
+ * Mounted once in `AppShell`, driven entirely by `store/console`. Rendering is
  * keyed on `ticketId`, which is what makes reconnect correct: a ticket is
  * single-use, so a retry has to remount the viewer against a *new* ticket rather
  * than ask the old tunnel to redial.
+ *
+ * A port of the operator app's overlay, as its store is; the viewer inside it is
+ * genuinely shared.
  */
 
 import { AlertDialog } from "@base-ui/react/alert-dialog"
 import { Loader2, Monitor, RotateCw, X } from "lucide-react"
 import { useCallback, useRef } from "react"
 
-import { GuacDisplay } from "@/components/console/GuacDisplay"
+import { GuacDisplay } from "@shared/components/console/GuacDisplay"
 import { Button } from "@/components/ui/button"
 import { consoleTunnelData, consoleTunnelUrl } from "@/lib/ws"
-import { useAuthStore } from "@/store/auth"
 import { useConsoleStore } from "@/store/console"
 
 export function RemoteDesktopOverlay() {
@@ -26,7 +24,6 @@ export function RemoteDesktopOverlay() {
   const setStatus = useConsoleStore((s) => s.setStatus)
   const reconnect = useConsoleStore((s) => s.reconnect)
   const close = useConsoleStore((s) => s.close)
-  const token = useAuthStore((s) => s.token)
   const actionsRef = useRef<{ sendCtrlAltDel: () => void } | null>(null)
 
   const onConnected = useCallback(() => setStatus("connected"), [setStatus])
@@ -38,7 +35,7 @@ export function RemoteDesktopOverlay() {
     () =>
       setStatus(
         "error",
-        "The session ended. This is normal after a sign-out inside the guest, or if the VM was torn down.",
+        "The session ended. This is normal after a sign-out inside the guest, or if the VM was destroyed.",
       ),
     [setStatus],
   )
@@ -96,7 +93,7 @@ export function RemoteDesktopOverlay() {
               <GuacDisplay
                 key={session.ticketId}
                 tunnelUrl={consoleTunnelUrl(session.ticketId)}
-                tunnelData={consoleTunnelData(token)}
+                tunnelData={consoleTunnelData()}
                 actionsRef={actionsRef}
                 onConnected={onConnected}
                 onError={onError}

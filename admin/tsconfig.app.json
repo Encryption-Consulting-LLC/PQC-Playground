@@ -15,9 +15,11 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Path alias */
+    /* Path aliases. `@shared` reaches into the operator app for the one file
+       both consoles render — the Guacamole viewer. Mirrored in vite.config.ts. */
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@shared/*": ["../frontend/src/*"]
     },
 
     /* Linting */
@@ -27,5 +29,5 @@
     "erasableSyntaxOnly": true,
     "noFallthroughCasesInSwitch": true
   },
-  "include": ["src"]
+  "include": ["src", "../frontend/src/components/console", "../frontend/src/types"]
 }

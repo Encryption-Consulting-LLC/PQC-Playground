@@ -1,6 +1,7 @@
 import { Link, Outlet, useMatchRoute } from "@tanstack/react-router"
 import { Badge } from "@/components/ui/badge"
 import { LogoutButton } from "@/components/LogoutButton"
+import { RemoteDesktopOverlay } from "@/components/RemoteDesktopOverlay"
 import { ThemeToggle } from "@/components/ThemeToggle"
 import { useMe } from "@/hooks/useMe"
 import { SECTIONS } from "@/nav"
@@ -75,6 +76,9 @@ export function AppShell() {
           <Outlet />
         </main>
       </div>
+      {/* Mounted once at the shell, not inside a section: a full-screen session
+          must survive navigating away from the registry tab that opened it. */}
+      <RemoteDesktopOverlay />
     </div>
   )
 }
