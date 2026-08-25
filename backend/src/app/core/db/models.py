@@ -118,7 +118,8 @@ class VmRegistryEntry(MongoModel):
     # absent from ``VmRegistryUpsert`` and stripped from the registry read. None
     # on a domain controller (its credential is the operator's
     # ``domainAdminPassword``, already stored under ``agent.templateConfig``), on
-    # a Linux template, and on any VM cloned before the console existed.
+    # a Linux template, on a VM cloned while no ``cloneAdminPassword`` was
+    # recorded in settings, and on any VM cloned before the console existed.
     local_admin_password_enc: dict | None = Field(
         default=None, alias="localAdminPasswordEnc"
     )
@@ -160,8 +161,9 @@ class SettingsDoc(BaseModel):
 
     Authoritative for the shared ESXi target and guided-deploy golden image —
     seeded from env on first boot, then admin-editable via the settings routes
-    with no restart. The password is stored only as the ``core/secrets.py``
-    ``{keyId, nonce, ciphertext}`` shape and is never returned by the API.
+    with no restart. Both passwords — the ESXi target's and the golden image's
+    built-in ``Administrator`` — are stored only as the ``core/secrets.py``
+    ``{keyId, nonce, ciphertext}`` shape and are never returned by the API.
     """
 
     model_config = ConfigDict(populate_by_name=True)
@@ -178,6 +180,13 @@ class SettingsDoc(BaseModel):
     clone_guest_os: str = Field(default="windows2022srvNext-64", alias="cloneGuestOs")
     clone_network: str = Field(default="VM Network", alias="cloneNetwork")
     clone_max_usage_pct: float = Field(default=80.0, alias="cloneMaxUsagePct")
+    # The image's own pre-sysprep local ``Administrator`` password. Stored in the
+    # same ``core/secrets.py`` envelope as the ESXi one and equally never
+    # returned by the API — the settings routes expose only
+    # ``hasCloneAdminPassword``.
+    clone_admin_password_enc: dict[str, str] | None = Field(
+        default=None, alias="cloneAdminPasswordEnc"
+    )
     infrastructure_profiles: list[dict] = Field(
         default_factory=list, alias="infrastructureProfiles"
     )
@@ -194,7 +203,7 @@ class SettingsDoc(BaseModel):
     guest_dns2: str | None = Field(default=None, alias="guestDns2")
     guest_dns_suffix: str | None = Field(default=None, alias="guestDnsSuffix")
     feature_flags: dict[str, bool] = Field(default_factory=dict, alias="featureFlags")
-    schema_version: int = Field(default=5, alias="schemaVersion")
+    schema_version: int = Field(default=6, alias="schemaVersion")
     updated_at: int = Field(alias="updatedAt")
 
 

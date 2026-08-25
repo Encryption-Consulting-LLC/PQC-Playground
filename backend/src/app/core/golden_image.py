@@ -1,4 +1,5 @@
-"""Read-only ESXi preflight for the guided-deploy Windows golden image."""
+"""The guided-deploy Windows golden image: its ESXi preflight, and the built-in
+``Administrator`` password every guest cloned from it keeps."""
 
 import hashlib
 import json
@@ -10,7 +11,9 @@ from vmkit.datastore import get_base_vmdk_size
 from vmkit.esxi import get_datastore, list_vm_names
 
 from app.core.datastore_image import read_datastore_vmx
+from app.core.db.client import SETTINGS_DOC_ID
 from app.core.db.models import now_ms
+from app.core.secrets import SecretDecryptionError, decrypt_secret
 from app.core.settings import settings
 from app.core.vmware_guest_os import guest_os_ids_match
 
@@ -72,6 +75,43 @@ def golden_image_config_from_doc(doc: dict | None) -> GoldenImageConfig:
         datastore=doc.get("cloneDatastore") or settings.clone_datastore,
         expectedGuestOs=doc.get("cloneGuestOs") or settings.clone_guest_os,
         maxUsagePct=doc.get("cloneMaxUsagePct") or settings.clone_max_usage_pct,
+    )
+
+
+def image_admin_password_from_doc(doc: dict | None) -> str:
+    """The image's built-in local ``Administrator`` password, ``""`` when unset.
+
+    Deliberately *not* a field on ``GoldenImageConfig``: that model is serialized
+    into every preflight response, and this value must never leave the server.
+
+    A guest cloned from the image keeps this password — firstboot re-asserts it
+    rather than inventing one, so what the remote-desktop console has stored is
+    the same credential the operator types at the VM console. A domain controller
+    is the exception and uses the operator's ``domainAdminPassword`` instead
+    (``Install-ADDSForest`` promotes that account into the forest keeping its
+    password, so nothing else can be the domain Administrator's).
+
+    ``""`` on a decryption failure rather than a raise, matching
+    ``core/console/credentials.py``: a rotated ``SETTINGS_ENC_KEY`` should cost
+    the console credential, not fail every clone.
+    """
+
+    doc = doc or {}
+    envelope = doc.get("cloneAdminPasswordEnc")
+    if not envelope:
+        return settings.clone_admin_password
+    try:
+        return decrypt_secret(dict(envelope))
+    except SecretDecryptionError:
+        return ""
+
+
+def load_image_admin_password_sync(db) -> str:
+    """Worker variant of ``image_admin_password_from_doc`` over an open sync
+    database — the clone task's only reader of it."""
+
+    return image_admin_password_from_doc(
+        db["settings"].find_one({"_id": SETTINGS_DOC_ID})
     )
 
 

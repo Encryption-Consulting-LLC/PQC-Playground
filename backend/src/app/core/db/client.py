@@ -194,8 +194,9 @@ async def _seed_settings_doc() -> None:
     """Insert the settings singleton from env if absent; operator edits made
     through the settings routes survive restarts ($setOnInsert only).
 
-    The env ESXi password (if provided) is encrypted at seed time — it exists
-    in Mongo only as ciphertext. Deferred import: ``core.secrets`` needs
+    Both env passwords (if provided) — the ESXi target's and the golden image's
+    built-in ``Administrator`` — are encrypted at seed time, so they exist in
+    Mongo only as ciphertext. Deferred import: ``core.secrets`` needs
     ``SETTINGS_ENC_KEY``, and keeping it out of module scope keeps this module
     importable in tooling contexts without the full secret env."""
     from app.core.secrets import encrypt_secret
@@ -212,6 +213,11 @@ async def _seed_settings_doc() -> None:
         clone_guest_os=settings.clone_guest_os,
         clone_network=settings.clone_network,
         clone_max_usage_pct=settings.clone_max_usage_pct,
+        clone_admin_password_enc=(
+            encrypt_secret(settings.clone_admin_password)
+            if settings.clone_admin_password
+            else None
+        ),
         guest_ip_start=settings.guest_ip_start,
         guest_ip_end=settings.guest_ip_end,
         guest_prefix=settings.guest_prefix,
@@ -226,7 +232,7 @@ async def _seed_settings_doc() -> None:
         {"$setOnInsert": to_mongo(seed)},
         upsert=True,
     )
-    # Backfill for documents created before the password field existed (or
+    # Backfill for documents created before either password field existed (or
     # wiped by an operator): the env seed fills an *absent* password but never
     # overwrites an operator-set one.
     if settings.esxi_password:
@@ -234,11 +240,22 @@ async def _seed_settings_doc() -> None:
             {"_id": SETTINGS_DOC_ID, "esxiPasswordEnc": None},
             {"$set": {"esxiPasswordEnc": encrypt_secret(settings.esxi_password)}},
         )
+    if settings.clone_admin_password:
+        await settings_col().update_one(
+            {"_id": SETTINGS_DOC_ID, "cloneAdminPasswordEnc": None},
+            {
+                "$set": {
+                    "cloneAdminPasswordEnc": encrypt_secret(
+                        settings.clone_admin_password
+                    )
+                }
+            },
+        )
     # Backfill golden-image fields added in schema v4 without overwriting an
     # operator's later choices.
     await settings_col().update_one(
         {"_id": SETTINGS_DOC_ID},
-        {"$set": {"schemaVersion": 5}},
+        {"$set": {"schemaVersion": 6}},
     )
     for field, value in (
         ("cloneBase", settings.clone_base),

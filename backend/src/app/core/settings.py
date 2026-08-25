@@ -91,6 +91,14 @@ class Settings(BaseSettings):
     clone_network: str = "VM Network"
     clone_max_usage_pct: float = 80.0
 
+    # The built-in local ``Administrator`` password baked into that image before
+    # sysprep. Every Windows guest but a domain controller keeps it, so it is the
+    # credential the remote-desktop console signs those guests in with — a fact
+    # about the image, not a password the platform chooses. Blank means "not
+    # recorded": firstboot then resets nothing and no console credential is
+    # stored. Seeds ``cloneAdminPasswordEnc`` on the settings document.
+    clone_admin_password: str = ""
+
     # Clone job queue: Valkey is the Celery broker, a per-job pub/sub bus, and the
     # snapshot store the job WebSocket reads from. The clone worker process opens
     # its own ESXi connection against the shared target from the settings document

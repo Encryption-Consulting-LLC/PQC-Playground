@@ -7,7 +7,9 @@ vars are only a first-boot seed.
 ``esxiPassword`` is write-only: accepted in the PUT body, stored as the
 AES-GCM blob from ``core/secrets.py``, and never returned — GET exposes just
 ``hasPassword``. That keeps the plaintext out of Mongo *and* out of every
-API response/log.
+API response/log. ``cloneAdminPassword`` — the golden image's own built-in
+``Administrator`` password — gets exactly the same treatment behind
+``hasCloneAdminPassword``.
 
 (Absolute imports mean no clash with ``app.core.settings``.)
 """
@@ -67,6 +69,13 @@ class SettingsUpdate(BaseModel):
     clone_max_usage_pct: float | None = Field(
         default=None, gt=0, le=100, alias="cloneMaxUsagePct"
     )
+    # Deliberately *not* held to ``password_policy_errors``: this records a
+    # password the image already has, it is not one the platform is choosing.
+    # Rejecting it here would only stop the admin describing reality. Empty
+    # string clears it.
+    clone_admin_password: str | None = Field(
+        default=None, max_length=128, alias="cloneAdminPassword"
+    )
     infrastructure_profiles: list[InfrastructureProfile] | None = Field(
         default=None, min_length=4, max_length=4, alias="infrastructureProfiles"
     )
@@ -105,9 +114,10 @@ class InfrastructureValidationRequest(BaseModel):
 
 
 def _present(doc: dict) -> dict:
-    """API shape: replace the ciphertext blob with a ``hasPassword`` flag."""
+    """API shape: replace each ciphertext blob with a boolean "is it set" flag."""
     out = from_mongo(doc)
     out["hasPassword"] = out.pop("esxiPasswordEnc", None) is not None
+    out["hasCloneAdminPassword"] = out.pop("cloneAdminPasswordEnc", None) is not None
     return out
 
 
@@ -230,6 +240,9 @@ async def update_settings(body: SettingsUpdate) -> dict:
     if "esxiPassword" in fields:
         password = fields.pop("esxiPassword")
         fields["esxiPasswordEnc"] = encrypt_secret(password) if password else None
+    if "cloneAdminPassword" in fields:
+        password = fields.pop("cloneAdminPassword")
+        fields["cloneAdminPasswordEnc"] = encrypt_secret(password) if password else None
 
     # Guest-range edits are validated against the *merged* document before
     # anything is written (a partial update can't be judged field-by-field),
