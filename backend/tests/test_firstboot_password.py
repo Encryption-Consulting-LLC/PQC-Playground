@@ -1,4 +1,4 @@
-"""The domain controller's firstboot Administrator password script.
+"""The firstboot Administrator password script.
 
 ``Install-ADDSForest`` promotes the guest's *local* ``Administrator`` into the new
 forest as the built-in **domain** Administrator, keeping its password — so
@@ -7,6 +7,10 @@ credential ``domain.join`` and the issuing-CA install later authenticate with
 (the dispatch half of that contract is pinned in ``test_domain_join_sequence``).
 Nothing else in the stack can set it: the agent has no password command, and the
 reset has to land before promotion.
+
+Every other Windows template gets the same script rendered the same way, from the
+golden image's own password — this module pins the *rendering*, and which password
+each role is handed is pinned in ``test_clone_admin_password``.
 """
 
 import os
@@ -107,6 +111,30 @@ def test_password_script_resets_the_builtin_administrator(packed, tmp_path):
         for line in script.splitlines()
         if "Write-Output" in line and PASSWORD in line
     ]
+
+
+def test_a_non_domain_controller_packs_it_in_the_same_place(packed, tmp_path):
+    """The password branch never consults ``template`` — only the *source* of the
+    value differs by role, and that choice lives in ``tasks._run_clone_op``. A
+    member server re-asserting the golden image's password gets a byte-identical
+    script at the same manifest position as the DC's."""
+
+    _build(
+        tmp_path,
+        template="webServer",
+        vm_name="guest-alice-9e4edb-srv1",
+        agent=_bundle(tmp_path),
+        admin_password=PASSWORD,
+    )
+
+    assert packed == [
+        "10-hostname.ps1",
+        "20-network.ps1",
+        "30-enable-rdp.ps1",
+        "40-install-executor.ps1",
+        "50-password.ps1",
+    ]
+    assert PASSWORD in (tmp_path / "50-password.ps1").read_text(encoding="utf-8")
 
 
 def test_agentless_path_still_gets_the_password_script(packed, tmp_path):

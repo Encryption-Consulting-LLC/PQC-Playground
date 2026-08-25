@@ -1,19 +1,17 @@
-"""Generated local ``Administrator`` passwords for the remote-desktop console.
+"""Where a non-domain-controller Windows guest's ``Administrator`` password comes
+from.
 
-A member server has no domain-wide account of its own, so before this the only
-Windows guest with a server-known credential was the domain controller (whose
-``domainAdminPassword`` firstboot resets the local Administrator to, because
-``Install-ADDSForest`` then promotes that account into the forest). Every other
-Windows template now gets a generated per-VM password instead — that is the
-credential the console signs in with, and a local account survives a domain join
-so no per-node domain-state logic is needed.
+It comes from the **golden image**, and that is the whole point. A guest cloned
+from the image answers to the password it was imaged with, so the credential an
+operator types at the VM console, the one the remote-desktop session uses, and
+the one recorded in settings are all the same string. A per-VM value minted by
+the server would be a password no human could type — the regression this suite
+exists to keep out.
 
-The rules pinned here are the ones that are silent when broken: a domain
-controller must keep the operator's password (or every later ``domain.join``
-fails with "the user name or password is incorrect"), an uploaded ISO must claim
-no password at all (that disc is attached verbatim, so no reset runs), and a
-redelivered clone over a surviving VM must not re-mint (the stored credential
-would then point at nothing).
+The domain controller is the single exception and is covered by
+``test_firstboot_password`` and ``test_console_credentials``: promotion turns its
+local Administrator into the forest's domain Administrator, so its credential
+must stay the operator's ``domainAdminPassword``.
 """
 
 import os
@@ -23,58 +21,92 @@ os.environ.setdefault(
     "SETTINGS_ENC_KEY", "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
 )
 
-from app.core.secrets import decrypt_secret, encrypt_secret  # noqa: E402
-from app.core.template_config import (  # noqa: E402
-    PASSWORD_MIN_LENGTH,
-    generate_local_admin_password,
-    password_policy_errors,
+from app.core.golden_image import (  # noqa: E402
+    image_admin_password_from_doc,
+    load_image_admin_password_sync,
 )
+from app.core.secrets import decrypt_secret, encrypt_secret  # noqa: E402
+from app.core.settings import settings  # noqa: E402
 
-VM_NAME = "guest-alice-9e4edb-ca01"
-
-
-def test_generated_password_satisfies_the_operator_policy():
-    """One definition of compliance, not two — a generated password is held to
-    the same gate ``validate_template_config`` holds an operator's to."""
-
-    for _ in range(50):
-        value = generate_local_admin_password(VM_NAME)
-        assert password_policy_errors(value, VM_NAME) == []
-        assert len(value) >= PASSWORD_MIN_LENGTH
+PASSWORD = "Str0ng-Lab-Pass!"
 
 
-def test_generated_password_is_powershell_safe():
-    """The value is interpolated into firstboot PowerShell by
-    ``configgen.render_password``, so a quote or ``$`` in one we mint would turn a
-    credential bootstrap into a syntax error on a VM nobody can log into yet."""
+class _FakeDb:
+    """Just enough of the worker's sync database for the one read."""
 
-    for _ in range(50):
-        value = generate_local_admin_password(VM_NAME)
-        assert not set(value) & set("'\"`$;\\")
+    def __init__(self, doc):
+        self._doc = doc
 
+    def __getitem__(self, name):
+        assert name == "settings"
+        return self
 
-def test_generated_passwords_are_unique_per_call():
-    """Per-VM, not per-deploy: one guest's console credential must not open
-    another guest's desktop."""
-
-    assert len({generate_local_admin_password(VM_NAME) for _ in range(20)}) == 20
+    def find_one(self, query):
+        assert query == {"_id": "global"}
+        return self._doc
 
 
-def test_envelope_round_trips():
-    """What the registry stores is an AES-GCM envelope, and the console reads the
-    password back out of it — nothing persists plaintext."""
+def test_the_stored_password_round_trips():
+    """Settings hold ciphertext, never the password — same envelope as the ESXi
+    target's."""
 
-    value = generate_local_admin_password(VM_NAME)
-    envelope = encrypt_secret(value)
+    envelope = encrypt_secret(PASSWORD)
 
-    assert value not in str(envelope)
-    assert decrypt_secret(envelope) == value
+    assert PASSWORD not in str(envelope)
+    assert decrypt_secret(envelope) == PASSWORD
+    assert (
+        image_admin_password_from_doc({"cloneAdminPasswordEnc": envelope}) == PASSWORD
+    )
 
 
-def test_machine_name_is_excluded():
-    """The policy rejects a password containing the machine name; the generator
-    is sampled against that policy, so it cannot emit one."""
+def test_the_settings_document_wins_over_the_env_seed(monkeypatch):
+    """``CLONE_ADMIN_PASSWORD`` only seeds the document; an admin's later edit in
+    the console is authoritative, exactly as it is for the ESXi target."""
 
-    assert password_policy_errors("ca01-ca01-ca01A!", "ca01") != []
-    for _ in range(25):
-        assert "ca01" not in generate_local_admin_password("ca01").lower()
+    monkeypatch.setattr(settings, "clone_admin_password", "env-seed-value")
+
+    doc = {"cloneAdminPasswordEnc": encrypt_secret(PASSWORD)}
+
+    assert image_admin_password_from_doc(doc) == PASSWORD
+
+
+def test_the_env_seed_covers_a_document_that_predates_the_field(monkeypatch):
+    """An existing deployment's settings document has no ``cloneAdminPasswordEnc``
+    until the seeder backfills it, and the clone task must not go blank in the
+    meantime."""
+
+    monkeypatch.setattr(settings, "clone_admin_password", PASSWORD)
+
+    assert image_admin_password_from_doc({}) == PASSWORD
+    assert image_admin_password_from_doc(None) == PASSWORD
+
+
+def test_unrecorded_reads_as_blank(monkeypatch):
+    """Blank is a real answer, not an error: firstboot then resets nothing (the
+    guest keeps its image password either way) and no console credential is
+    stored, which the console route turns into an actionable 409."""
+
+    monkeypatch.setattr(settings, "clone_admin_password", "")
+
+    assert image_admin_password_from_doc({}) == ""
+    assert image_admin_password_from_doc({"cloneAdminPasswordEnc": None}) == ""
+
+
+def test_an_undecryptable_envelope_reads_as_blank(monkeypatch):
+    """A rotated ``SETTINGS_ENC_KEY`` costs the console credential; it must not
+    fail every clone."""
+
+    monkeypatch.setattr(settings, "clone_admin_password", "")
+
+    corrupt = encrypt_secret(PASSWORD) | {"ciphertext": "not-base64-ciphertext"}
+
+    assert image_admin_password_from_doc({"cloneAdminPasswordEnc": corrupt}) == ""
+
+
+def test_the_worker_reads_the_same_singleton():
+    """The clone task runs on a sync PyMongo client of its own, so this is the
+    path that actually decides what lands on the disc."""
+
+    doc = {"_id": "global", "cloneAdminPasswordEnc": encrypt_secret(PASSWORD)}
+
+    assert load_image_admin_password_sync(_FakeDb(doc)) == PASSWORD

@@ -16,17 +16,22 @@ There are exactly two answers, and the split is not cosmetic:
   credential ``core.sequences.definitions`` authenticates every ``domain.join``
   and the issuing-CA install with, which is why the username is formatted by
   that module's ``admin_username`` rather than re-derived here.
-* **Everything else Windows** signs in as ``.\\Administrator`` with the generated
-  per-VM password from its ``localAdminPasswordEnc`` envelope. A member server
-  has no domain-wide account of its own, and a local account keeps working after
-  a domain join — so this needs no per-node domain-state logic and stays correct
-  whether the node has joined, left, or never joined a domain.
+* **Everything else Windows** signs in as ``.\\Administrator`` with the golden
+  image's own built-in Administrator password, stamped onto the VM's
+  ``localAdminPasswordEnc`` envelope at clone time from the admin-recorded
+  ``cloneAdminPassword`` setting. The guest keeps the password it was imaged with
+  (firstboot only re-asserts it), which is what makes this the same credential an
+  operator types at the VM console rather than a value only the server knows. A
+  member server has no domain-wide account of its own, and a local account keeps
+  working after a domain join — so this needs no per-node domain-state logic and
+  stays correct whether the node has joined, left, or never joined a domain.
 
 ``None`` means "no session is possible", and the routes turn that into an
 actionable 409 rather than opening a connection that will fail at the RDP login
-prompt. It happens for a Linux product template (no RDP at all), and for any VM
-cloned before the console existed — nothing retroactively sets a password inside
-a running guest, so those need a redeploy.
+prompt. It happens for a Linux product template (no RDP at all), for a VM cloned
+while no ``cloneAdminPassword`` was recorded, and for any VM cloned before the
+console existed — nothing retroactively reads a password out of a running guest,
+so those need the setting filled in and a redeploy.
 """
 
 from dataclasses import dataclass
@@ -39,7 +44,7 @@ from app.core.template_config import (
     decrypt_config_secrets,
 )
 
-#: The one template whose credential is the operator's, not a generated one.
+#: The one template whose credential is the operator's, not the image's.
 DOMAIN_CONTROLLER_TEMPLATE = "domainController"
 
 

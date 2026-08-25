@@ -76,7 +76,7 @@ def test_domain_controller_without_a_stored_password_has_no_session():
     assert resolve_console_credentials(row) is None
 
 
-def test_member_server_uses_its_generated_local_administrator():
+def test_member_server_uses_the_local_administrator_from_the_image():
     creds = resolve_console_credentials(_member_row())
 
     assert creds is not None
@@ -87,8 +87,9 @@ def test_member_server_uses_its_generated_local_administrator():
 
 
 def test_member_server_without_a_stored_envelope_has_no_session():
-    """The pre-console fleet. Nothing sets a password inside a running guest, so
-    the only honest answer is a redeploy."""
+    """The pre-console fleet, and any guest cloned while no image password was
+    recorded. Nothing reads a password out of a running guest, so the only honest
+    answer is to record it and redeploy."""
 
     assert resolve_console_credentials(_member_row(password=None)) is None
 

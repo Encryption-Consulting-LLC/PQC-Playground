@@ -50,6 +50,7 @@ from app.core.firstboot import AgentBundle, build_firstboot_iso, platform_for_te
 from app.core.golden_image import (
     GoldenImageConfig,
     GoldenImagePreflight,
+    load_image_admin_password_sync,
     golden_image_config_from_doc,
     preflight_golden_image,
 )
@@ -72,12 +73,11 @@ from app.core.infrastructure_preflight import (
 from app.core.settings import settings
 from app.core.evidence import redact_evidence
 from app.core.vm_naming import project_code
-from app.core.secrets import decrypt_secret, encrypt_secret
+from app.core.secrets import encrypt_secret
 from app.core.template_config import (
     DOMAIN_ADMIN_PASSWORD_KEY,
     encrypt_config_secrets,
     extract_template_config,
-    generate_local_admin_password,
 )
 from app.core.jobs import transport
 from app.core.jobs.models import (
@@ -1035,14 +1035,20 @@ def _run_clone_op(
             push()
             return False
 
-    # The guest's local ``Administrator`` password, which firstboot sets and the
-    # remote-desktop console later signs in with. A domain controller is excluded:
-    # ``Install-ADDSForest`` turns *its* local Administrator into the domain
-    # Administrator, so its credential must stay the operator's
-    # ``domainAdminPassword`` (already stored under ``agent.templateConfig``) or
-    # every later domain join breaks. An uploaded ISO is excluded too — that disc
-    # is attached verbatim, so no password script runs and claiming one was set
-    # would be a lie the console would then fail on.
+    # The guest's local ``Administrator`` password: the one the golden image was
+    # sysprepped with, which firstboot re-asserts and the remote-desktop console
+    # later signs in with. It is *carried over*, never invented — a VM built from
+    # the image answers to the password the operator already knows, and a value
+    # the server minted per VM would be one nobody could type at the VM console.
+    # The same value every time also makes this idempotent under Celery
+    # redelivery for free.
+    #
+    # A domain controller is excluded: ``Install-ADDSForest`` turns *its* local
+    # Administrator into the domain Administrator, so its credential must stay the
+    # operator's ``domainAdminPassword`` (already stored under
+    # ``agent.templateConfig``) or every later domain join breaks. An uploaded ISO
+    # is excluded too — that disc is attached verbatim, so no password script runs
+    # and claiming one was set would be a lie the console would then fail on.
     local_admin_password = ""
     local_admin_enc: dict | None = None
     if (
@@ -1050,18 +1056,8 @@ def _run_clone_op(
         and platform_for_template(template) == "windows"
         and template != "domainController"
     ):
-        existing = db["vm_registry"].find_one(
-            {"vmName": vm_name}, {"localAdminPasswordEnc": 1}
-        )
-        local_admin_enc = (existing or {}).get("localAdminPasswordEnc")
-        if local_admin_enc:
-            # Redelivery over a survivor: the running VM booted with this
-            # password, and its throwaway replacement ISO will not boot. Minting
-            # a new one would leave the stored credential pointing at nothing —
-            # the same reason the agent token is never re-minted below.
-            local_admin_password = decrypt_secret(local_admin_enc)
-        else:
-            local_admin_password = generate_local_admin_password(vm_name)
+        local_admin_password = load_image_admin_password_sync(db)
+        if local_admin_password:
             local_admin_enc = encrypt_secret(local_admin_password)
 
     # Attribution is written on this FIRST upsert, not the later ``ready`` one,
@@ -1083,7 +1079,12 @@ def _run_clone_op(
         # Written here rather than on the ``ready`` upsert for the same reason
         # attribution is: a clone that fails leaves a VM whose console credential
         # is still recoverable, which is exactly when someone wants to look inside.
-        **({"localAdminPasswordEnc": local_admin_enc} if local_admin_enc else {}),
+        # Written *unconditionally*, ``None`` included: teardown never unsets this
+        # field, so a redeploy of the same VM name onto a surviving row — an
+        # uploaded ISO, or a cleared setting — would otherwise leave the previous
+        # VM's envelope in place and hand the console a password this guest has
+        # never had.
+        localAdminPasswordEnc=local_admin_enc,
     )
     try:
         with TemporaryDirectory() as tmp:
@@ -1157,9 +1158,11 @@ def _run_clone_op(
                     # only the *source* differs. On a domain controller it is the
                     # operator's password, which promotion turns into the forest's
                     # domain Administrator password and every later domain join
-                    # authenticates with. Everywhere else it is the generated
-                    # per-VM one above, which exists for the console. Exactly one
-                    # of the two is ever non-blank; Linux templates get neither.
+                    # authenticates with. Everywhere else it is the golden image's
+                    # own password above, so the reset is a no-op that simply makes
+                    # the stored console credential true. Exactly one of the two is
+                    # ever non-blank; Linux templates get neither, and neither does
+                    # a guest whose image password has not been recorded.
                     admin_password=(
                         template_config.get(DOMAIN_ADMIN_PASSWORD_KEY, "")
                         or local_admin_password

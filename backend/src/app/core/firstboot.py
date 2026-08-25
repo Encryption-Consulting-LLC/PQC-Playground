@@ -27,10 +27,13 @@ The password's *source* differs by role, and the caller decides (see
 ``tasks.py``): a domain controller uses the operator's ``domainAdminPassword``,
 because that is what every later ``domain.join`` and the issuing-CA install
 authenticate with as ``<NETBIOS>\\Administrator``. Every other Windows template
-gets a per-VM generated password, persisted AES-GCM on its ``vm_registry`` row,
-which exists so remote desktop has a credential to sign in with — a member
-server has no domain-wide account of its own, and a local account survives a
-domain join.
+re-asserts the golden image's *own* built-in Administrator password (the
+admin-recorded ``cloneAdminPassword`` setting), so the guest answers to the
+password it was imaged with rather than one the platform invented — the reset is
+a no-op on an image that persisted it and self-healing on one that did not. That
+same value is persisted AES-GCM on the VM's ``vm_registry`` row so remote desktop
+has a credential to sign in with: a member server has no domain-wide account of
+its own, and a local account survives a domain join.
 
 Numbering fixes manifest (execution) order: ``10-`` hostname, ``20-`` network,
 ``30-`` Remote Desktop enablement (every Windows template), ``40-`` agent install
@@ -210,8 +213,9 @@ def build_firstboot_iso(
     A non-empty ``admin_password`` on a Windows template additionally renders
     ``50-password.ps1``, resetting the guest's built-in local ``Administrator``
     (see ``LOCAL_ADMIN_ACCOUNT``). Blank renders nothing, as does any Linux
-    template. Callers pass one for every Windows template — the DC's operator-set
-    ``domainAdminPassword``, or a generated per-VM password for the rest.
+    template. Callers pass one for every Windows template whose password is
+    known — the DC's operator-set ``domainAdminPassword``, or the golden image's
+    own Administrator password for the rest.
 
     Every Windows template also gets the static ``30-enable-rdp.ps1`` step, which
     is not overridable via ``authored_scripts``.
