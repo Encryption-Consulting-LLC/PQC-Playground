@@ -179,18 +179,28 @@ Open <http://localhost:5432>. Vite proxies `/api` HTTP and WebSocket traffic to
    account nor clears that flag. A renamed, deleted, or must-change builtin makes
    first boot fail, and a local password policy stricter than the console's own
    (12 characters, 3 character classes) makes the reset throw.
-4. Place the agent at `backend/agent/pki-executor.exe` or set
+4. Record that account's password under **Infrastructure → Image** as the *image
+   Administrator password* (`CLONE_ADMIN_PASSWORD` seeds it on first boot). Every
+   Windows guest but the domain controller keeps the password it was imaged with —
+   first boot only re-asserts it — so this is the credential you type at a VM
+   console *and* the one Remote Desktop signs those guests in with. Record the
+   image's real password rather than choosing a new one: the setting describes the
+   image, it does not change it. Leaving it empty is supported and costs only
+   Remote Desktop on those guests.
+5. Place the agent at `backend/agent/pki-executor.exe` or set
    `EXECUTOR_AGENT_PATH` to a path readable by both API and worker hosts.
-5. Set `BACKEND_PUBLIC_URL` to the origin deployed guests use to reach the API.
+6. Set `BACKEND_PUBLIC_URL` to the origin deployed guests use to reach the API.
    The agent connects at `/api/executor/connect`; the URL must therefore be
    reachable from the ESXi guest network and support WebSocket upgrades.
-6. Set the domain controller node's **domain admin password** to something you
-   control. It is the lab's single Windows credential: the DC's first-boot ISO
+7. Set the domain controller node's **domain admin password** to something you
+   control. It is the domain's Windows credential: the DC's first-boot ISO
    resets the guest's built-in local `Administrator` to it, `Install-ADDSForest`
    promotes that account into the domain, and every later domain join plus the
-   issuing-CA install then sign in as `<NETBIOS>\Administrator` with it.
-   Deploying a domain controller without one is rejected with a 422.
-7. Create the preconfigured PKI project, review the compiler output, and deploy.
+   issuing-CA install then sign in as `<NETBIOS>\Administrator` with it. It is the
+   one machine that does *not* keep the image password, because promotion carries
+   whatever the local Administrator holds into the forest. Deploying a domain
+   controller without one is rejected with a 422.
+8. Create the preconfigured PKI project, review the compiler output, and deploy.
 
 > **The starter project's default domain admin password ships inside the browser
 > bundle.** `VITE_PKI_DOMAIN_ADMIN_PASSWORD` is `VITE_`-prefixed, so its value —
