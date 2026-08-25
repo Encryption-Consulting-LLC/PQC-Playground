@@ -54,6 +54,7 @@ const EMPTY_FORM: FormState = {
   cloneGuestOs: "windows2022srvNext-64",
   cloneNetwork: "VM Network",
   cloneMaxUsagePct: "80",
+  cloneAdminPassword: "",
   guestIpStart: "",
   guestIpEnd: "",
   guestPrefix: "24",
@@ -63,6 +64,7 @@ const EMPTY_FORM: FormState = {
   guestDnsSuffix: "",
   profiles: DEFAULT_PROFILES,
   hasPassword: false,
+  hasCloneAdminPassword: false,
 }
 
 function formatBytes(value: number | null): string {
@@ -117,6 +119,8 @@ export function InfrastructureSection() {
           cloneGuestOs: settings.cloneGuestOs ?? "windows2022srvNext-64",
           cloneNetwork: settings.cloneNetwork ?? "VM Network",
           cloneMaxUsagePct: String(settings.cloneMaxUsagePct ?? 80),
+          // Write-only server-side: the GET returns only whether one is stored.
+          cloneAdminPassword: "",
           guestIpStart: settings.guestIpStart ?? "",
           guestIpEnd: settings.guestIpEnd ?? "",
           guestPrefix: String(settings.guestPrefix ?? 24),
@@ -135,6 +139,7 @@ export function InfrastructureSection() {
                 maxUsagePct: settings.cloneMaxUsagePct ?? profile.maxUsagePct,
               })),
           hasPassword: settings.hasPassword,
+          hasCloneAdminPassword: settings.hasCloneAdminPassword,
         })
       })
       .catch((error: Error) => {
@@ -265,6 +270,9 @@ export function InfrastructureSection() {
       cloneGuestOs: form.cloneGuestOs.trim(),
       cloneNetwork: form.cloneNetwork.trim(),
       cloneMaxUsagePct: Number(form.cloneMaxUsagePct),
+      // Write-only, like the ESXi password: an untouched field is absent from the
+      // body rather than sent blank, or every unrelated save would clear it.
+      ...(form.cloneAdminPassword ? { cloneAdminPassword: form.cloneAdminPassword } : {}),
       guestIpStart: form.guestIpStart.trim(),
       guestIpEnd: form.guestIpEnd.trim(),
       guestPrefix: Number(form.guestPrefix),
@@ -309,6 +317,8 @@ export function InfrastructureSection() {
         ...current,
         esxiPassword: "",
         hasPassword: saved.hasPassword,
+        cloneAdminPassword: "",
+        hasCloneAdminPassword: saved.hasCloneAdminPassword,
       }))
       if (showToast) toast.success("Infrastructure settings saved.")
       return true

@@ -242,6 +242,7 @@ export interface OperatorSettings {
   cloneGuestOs: string
   cloneNetwork: string
   cloneMaxUsagePct: number
+  hasCloneAdminPassword: boolean
   infrastructureProfiles: InfrastructureProfile[]
   guestIpStart: string | null
   guestIpEnd: string | null
@@ -262,6 +263,7 @@ export interface OperatorSettingsUpdate {
   cloneGuestOs?: string
   cloneNetwork?: string
   cloneMaxUsagePct?: number
+  cloneAdminPassword?: string
   infrastructureProfiles?: InfrastructureProfile[]
   guestIpStart?: string
   guestIpEnd?: string

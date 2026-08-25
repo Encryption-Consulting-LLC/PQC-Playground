@@ -12,6 +12,7 @@ export interface FormState {
   cloneGuestOs: string
   cloneNetwork: string
   cloneMaxUsagePct: string
+  cloneAdminPassword: string
   guestIpStart: string
   guestIpEnd: string
   guestPrefix: string
@@ -21,6 +22,7 @@ export interface FormState {
   guestDnsSuffix: string
   profiles: InfrastructureProfile[]
   hasPassword: boolean
+  hasCloneAdminPassword: boolean
 }
 
 /**
