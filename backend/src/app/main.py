@@ -81,6 +81,19 @@ def _admin_dist() -> Path:
     return Path(__file__).resolve().parents[3] / "admin" / "dist"
 
 
+def _shell(index: Path) -> FileResponse:
+    """A SPA's ``index.html``, explicitly uncacheable.
+
+    The assets beside it are content-hashed and may be cached forever; the shell
+    is the one file that must not be, because it is what names them. Without a
+    ``Cache-Control`` a browser applies heuristic freshness from `Last-Modified`
+    and can serve yesterday's shell — pointing at yesterday's bundle — without
+    revalidating. A deploy then looks like it did not happen: the fix is on the
+    box, the origin serves the new shell, and the tab keeps running the old one.
+    """
+    return FileResponse(index, headers={"Cache-Control": "no-store, must-revalidate"})
+
+
 def _mount_admin(app: FastAPI) -> None:
     """Serve the built admin SPA at ``/admin``, same origin as the API.
 
@@ -102,14 +115,14 @@ def _mount_admin(app: FastAPI) -> None:
 
     @app.get("/admin", include_in_schema=False)
     async def _admin_root() -> FileResponse:
-        return FileResponse(index)
+        return _shell(index)
 
     @app.get("/admin/{path:path}", include_in_schema=False)
     async def _admin_catch_all(path: str) -> FileResponse:
         candidate = dist / path
         if candidate.is_file() and candidate.resolve().is_relative_to(dist.resolve()):
             return FileResponse(candidate)
-        return FileResponse(index)
+        return _shell(index)
 
 
 def _mount_frontend(app: FastAPI) -> None:
@@ -133,7 +146,7 @@ def _mount_frontend(app: FastAPI) -> None:
 
     @app.get("/", include_in_schema=False)
     async def _spa_root() -> FileResponse:
-        return FileResponse(index)
+        return _shell(index)
 
     @app.get("/{path:path}", include_in_schema=False)
     async def _spa_catch_all(path: str) -> FileResponse:
@@ -143,7 +156,7 @@ def _mount_frontend(app: FastAPI) -> None:
         candidate = dist / path
         if candidate.is_file() and candidate.resolve().is_relative_to(dist.resolve()):
             return FileResponse(candidate)
-        return FileResponse(index)
+        return _shell(index)
 
 
 def create_app() -> FastAPI:

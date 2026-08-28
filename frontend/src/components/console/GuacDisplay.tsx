@@ -199,19 +199,6 @@ export function GuacDisplay({
       settle(() =>
         handlers.current.onError?.(status.message || "The connection failed."),
       )
-    client.onstatechange = (state) => {
-      if (state === CLIENT_CONNECTED) {
-        // First `sync` — the guest is actually painting.
-        window.clearTimeout(deadline)
-        handlers.current.onConnected?.()
-      }
-      // A disconnect with no prior error is the ordinary ending: the user closed
-      // the overlay, signed out inside the guest, or the VM was torn down.
-      if (state === CLIENT_DISCONNECTED) {
-        settle(() => handlers.current.onDisconnected?.(undefined))
-      }
-    }
-
     // Two halves of "the desktop fits the panel", and both are needed.
     //
     // Ask the guest to *be* the panel's size, which is the crisp outcome:
@@ -244,6 +231,27 @@ export function GuacDisplay({
     }
     const observer = new ResizeObserver(resize)
     observer.observe(container)
+
+    client.onstatechange = (state) => {
+      if (state === CLIENT_CONNECTED) {
+        // First `sync` — the guest is actually painting.
+        window.clearTimeout(deadline)
+        handlers.current.onConnected?.()
+        // And *now* ask for the panel's size. `sendSize` is dropped silently
+        // while the client is not connected, and the observer below fires on
+        // `observe()` — a frame or so before the tunnel is up — so the request
+        // was being thrown away and the guest kept the handshake's 1280x800.
+        // Whether it survived depended on the container happening to change size
+        // again later, which is why the desktop was sometimes panel-sized and
+        // sometimes letterboxed.
+        resize()
+      }
+      // A disconnect with no prior error is the ordinary ending: the user closed
+      // the overlay, signed out inside the guest, or the VM was torn down.
+      if (state === CLIENT_DISCONNECTED) {
+        settle(() => handlers.current.onDisconnected?.(undefined))
+      }
+    }
 
     client.connect(tunnelData)
 
