@@ -200,6 +200,22 @@ export function GuacDisplay({
     <div
       ref={containerRef}
       className="flex h-full w-full items-center justify-center overflow-hidden bg-black"
+      // Load-bearing, and invisible when missing. Guacamole gives every layer's
+      // canvas `z-index: -1`, so each one paints behind the nearest ancestor that
+      // establishes a stacking context — and with none here that is the *root*,
+      // i.e. behind this container's own background and behind the overlay's
+      // `z-50` popup. The session then works perfectly and shows a black
+      // rectangle: frames arrive, the client reports CONNECTED, `toDataURL()` on
+      // the canvas returns the full desktop, and nothing is composited. Isolating
+      // makes this element the stacking context, so its background paints first
+      // and the negative-z canvases land on top of it. Set inline rather than as
+      // Tailwind's `isolate`, because this file is shared with `admin/` and sits
+      // outside that app's Tailwind source root: the utility would only be
+      // emitted there for as long as some *other* admin component happens to use
+      // it. The one giveaway while it was broken: the mouse cursor was visible,
+      // because Guacamole gives the cursor layer a `transform` — which is a
+      // stacking context — and nothing else.
+      style={{ isolation: "isolate" }}
       // The guest owns the keyboard while this is mounted; a focusable container
       // is what makes click-to-type work without a stray tab stop.
       tabIndex={-1}
