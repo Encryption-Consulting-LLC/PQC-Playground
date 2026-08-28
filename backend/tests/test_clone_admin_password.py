@@ -105,6 +105,7 @@ def clone(monkeypatch):
                     base="ws-2025-base",
                     datastore="datastore1",
                     expectedGuestOs="windows2022srvNext-64",
+                    network="VM Network",
                     maxUsagePct=80.0,
                 ),
             )

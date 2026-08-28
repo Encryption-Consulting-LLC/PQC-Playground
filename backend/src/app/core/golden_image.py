@@ -26,6 +26,12 @@ class GoldenImageConfig(BaseModel):
     base: str
     datastore: str
     expected_guest_os: str = Field(alias="expectedGuestOs")
+    #: Port group the clone's NIC attaches to. Carried here — and on
+    #: ``InfrastructureProfile`` — because it is a *clone input*, not just a
+    #: preflight assertion: vmkit renders a fresh VMX per clone and pins
+    #: ``ethernet0.networkName`` from this value, so a config that omits it
+    #: silently falls back to vmkit's ``"VM Network"`` default.
+    network: str = Field(min_length=1, max_length=80)
     max_usage_pct: float = Field(alias="maxUsagePct", gt=0, le=100)
 
 
@@ -74,6 +80,7 @@ def golden_image_config_from_doc(doc: dict | None) -> GoldenImageConfig:
         base=doc.get("cloneBase") or settings.clone_base,
         datastore=doc.get("cloneDatastore") or settings.clone_datastore,
         expectedGuestOs=doc.get("cloneGuestOs") or settings.clone_guest_os,
+        network=doc.get("cloneNetwork") or settings.clone_network,
         maxUsagePct=doc.get("cloneMaxUsagePct") or settings.clone_max_usage_pct,
     )
 

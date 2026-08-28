@@ -42,6 +42,7 @@ def test_sizing_free_golden_image_falls_back_to_demo_defaults() -> None:
             base="ws-2025-base",
             datastore="datastore1",
             expectedGuestOs="windows2022srvNext-64",
+            network="VM Network",
             maxUsagePct=80,
         )
     )

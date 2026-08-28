@@ -146,6 +146,11 @@ def _plan_clone_defaults(config: "GoldenImageConfig | InfrastructureProfile") ->
         "base": config.base,
         "datastore": config.datastore,
         "guest_os": config.expected_guest_os,
+        # The port group is a clone input, not only a preflight assertion:
+        # vmkit renders a fresh VMX per clone rather than copying the base's,
+        # so omitting this pins every guest to vmkit's "VM Network" default no
+        # matter what the settings document or the role profile says.
+        "network": config.network,
         "max_usage_pct": config.max_usage_pct,
         "cpus": getattr(config, "cpus", None) or 8,
         "mem_mb": getattr(config, "memory_mb", None) or 8192,
@@ -184,7 +189,14 @@ def clone_vm_task(job_id: str, params: dict) -> None:
         reducer = CloneProgressReducer(
             transport.make_publisher(job_id), _clone_total_ops(req)
         )
-        result = clone_workflow(conn, progress=reducer, **params)
+        # Send the *validated* request rather than the raw payload, and drop
+        # unset optionals so each falls through to vmkit's own default. A task
+        # redelivered from before ``network`` existed carries no such key, and
+        # passing an explicit ``None`` would be a TypeError rather than the
+        # previous behaviour.
+        result = clone_workflow(
+            conn, progress=reducer, **req.model_dump(exclude_none=True)
+        )
         transport.publish(
             job_id, DoneMsg(result=asdict(result)), status=JobStatus.done, terminal=True
         )
@@ -949,6 +961,7 @@ def _run_clone_op(
         base=settings.clone_base,
         datastore=settings.clone_datastore,
         expectedGuestOs=settings.clone_guest_os,
+        network=settings.clone_network,
         maxUsagePct=settings.clone_max_usage_pct,
     )
     vm_name = op.params["vmName"]

@@ -32,7 +32,9 @@ from app.core.authz import (
     require_capability,
 )
 from app.core import agents
+from app.core.db import SETTINGS_DOC_ID, settings_col
 from app.core.esxi import get_esxi, load_target
+from app.core.golden_image import golden_image_config_from_doc
 from app.core.jobs import transport
 from app.core.jobs.models import JobStatus, Message, ProgressMsg, QueuedMsg
 
@@ -98,6 +100,12 @@ class CloneRequest(BaseModel):
     mac: str | None = None
     iso_path: str | None = None
     guest_os: str | None = None
+    #: Port group for the clone's NIC. ``None`` means "use the shared target's
+    #: configured one", resolved from the settings document in the route below
+    #: rather than left to vmkit's ``"VM Network"`` default — that default is
+    #: silent, and a clone on the wrong port group looks exactly like a guest
+    #: that never finished booting.
+    network: str | None = None
     max_usage_pct: float = 80.0
     skip_disk_check: bool = False
     power_on: bool = False
@@ -154,6 +162,10 @@ async def clone(
             detail="No shared ESXi target configured",
         )
     req.name = enforce_guest_vm_name(req.name, user)
+    if req.network is None:
+        req.network = golden_image_config_from_doc(
+            await settings_col().find_one({"_id": SETTINGS_DOC_ID})
+        ).network
 
     job_id = uuid.uuid4().hex
     transport.publish(job_id, QueuedMsg(), status=JobStatus.queued)
