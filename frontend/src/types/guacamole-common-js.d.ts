@@ -26,6 +26,7 @@ declare module "guacamole-common-js" {
     getWidth(): number
     getHeight(): number
     scale(scale: number): void
+    getScale(): number
     onresize: ((width: number, height: number) => void) | null
     /** Cursor hotspot, for `Mouse.setCursor`-style local cursor rendering. */
     getCursorLayer(): unknown
@@ -58,7 +59,9 @@ declare module "guacamole-common-js" {
     getDisplay(): Display
     connect(data?: string): void
     disconnect(): void
-    sendMouseState(state: MouseState): void
+    /** `applyDisplayScale` divides the position by the display scale, so a
+     * caller may hand over on-screen pixels and let the guest be told its own. */
+    sendMouseState(state: MouseState, applyDisplayScale?: boolean): void
     sendKeyEvent(pressed: 0 | 1, keysym: number): void
     sendSize(width: number, height: number): void
     onerror: ((status: { code: number; message: string }) => void) | null

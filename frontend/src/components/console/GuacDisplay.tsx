@@ -35,9 +35,18 @@
  * - The guest's cursor is handed to the browser as a CSS cursor rather than left
  *   to Guacamole's software cursor layer, or the page shows two pointers that
  *   disagree by a round trip.
+ * - Pointer coordinates are computed here from a bounding rect, *not* by
+ *   `Guacamole.Position.fromClientPosition`, which walks `offsetLeft`/`offsetTop`
+ *   and so cannot see a CSS transform. Both overlays centre their popup with
+ *   `-translate-x-1/2 -translate-y-1/2`, which made every click land half the
+ *   popup away from the visible pointer: measured at (40,30), the guest was told
+ *   (-743,-429).
+ * - The desktop is scaled to fit the panel. The guest is asked to match it, but a
+ *   guest that declines or snaps to its own mode would otherwise be clipped by
+ *   the container rather than letterboxed.
  */
 
-import Guacamole from "guacamole-common-js"
+import Guacamole, { type MouseState } from "guacamole-common-js"
 import { useEffect, useRef } from "react"
 
 /** X11 keysyms for the one key combination a browser will never deliver. */
@@ -96,10 +105,41 @@ export function GuacDisplay({
     const element = display.getElement()
     container.append(element)
 
+    // Where the pointer actually is. The library's own answer
+    // (`Guacamole.Position.fromClientPosition`) walks `offsetLeft`/`offsetTop` up
+    // the ancestor chain, which cannot see a CSS transform — and both overlays
+    // centre their popup with `-translate-x-1/2 -translate-y-1/2`, so every click
+    // landed half the popup's width and height away from the visible pointer.
+    // A bounding rect includes transforms, so this is the whole correction. The
+    // listeners are capture-phase on the same element, so the coordinates always
+    // belong to the very event the library is about to report.
+    let pointer = { clientX: 0, clientY: 0 }
+    const trackPointer = (event: MouseEvent) => {
+      pointer = { clientX: event.clientX, clientY: event.clientY }
+    }
+    for (const type of ["mousemove", "mousedown", "mouseup"] as const) {
+      element.addEventListener(type, trackPointer, true)
+    }
+
     const mouse = new Guacamole.Mouse(element)
-    mouse.onmousedown = (state) => client.sendMouseState(state)
-    mouse.onmouseup = (state) => client.sendMouseState(state)
-    mouse.onmousemove = (state) => client.sendMouseState(state)
+    /** Report the library's button state at *our* position, in guest pixels. */
+    const sendMouse = (state: MouseState) => {
+      const rect = element.getBoundingClientRect()
+      // `applyDisplayScale` divides by the display scale, so the position handed
+      // over is in on-screen pixels and the guest gets its own coordinates —
+      // which is what keeps clicks under the pointer on a scaled-down desktop.
+      client.sendMouseState(
+        {
+          ...state,
+          x: pointer.clientX - rect.left,
+          y: pointer.clientY - rect.top,
+        },
+        true,
+      )
+    }
+    mouse.onmousedown = sendMouse
+    mouse.onmouseup = sendMouse
+    mouse.onmousemove = sendMouse
 
     // One pointer, not two. By default Guacamole paints the guest's pointer into
     // a software cursor layer, which then coexists with the browser's own: the
@@ -172,13 +212,34 @@ export function GuacDisplay({
       }
     }
 
-    // Resize the guest to match the viewport. `resize-method=display-update` on
-    // the backend's connection parameters is what makes this take effect without
-    // reconnecting.
+    // Two halves of "the desktop fits the panel", and both are needed.
+    //
+    // Ask the guest to *be* the panel's size, which is the crisp outcome:
+    // `resize-method=display-update` makes that take effect without reconnecting.
+    // Dimensions are forced even, because an odd width or height is rejected and
+    // the guest then simply keeps the size it had.
+    //
+    // Then scale whatever the guest actually chose to fit. A guest may decline
+    // to resize, or snap to a mode of its own, and the container clips
+    // (`overflow-hidden`) — which is why the desktop had its bottom cut off
+    // rather than being letterboxed. Never scale *up*: a console is read, and
+    // upscaling 1280x800 into a wider panel only blurs the text.
+    const fit = () => {
+      const { width, height } = container.getBoundingClientRect()
+      const guestWidth = display.getWidth()
+      const guestHeight = display.getHeight()
+      if (!(width > 0 && height > 0 && guestWidth > 0 && guestHeight > 0))
+        return
+      display.scale(Math.min(1, width / guestWidth, height / guestHeight))
+    }
+    // The guest answering a resize request is the other moment the fit changes.
+    display.onresize = fit
+
     const resize = () => {
       const { width, height } = container.getBoundingClientRect()
       if (width > 0 && height > 0) {
-        client.sendSize(Math.floor(width), Math.floor(height))
+        client.sendSize(Math.floor(width / 2) * 2, Math.floor(height / 2) * 2)
+        fit()
       }
     }
     const observer = new ResizeObserver(resize)
@@ -196,6 +257,10 @@ export function GuacDisplay({
       mouse.onmousedown = null
       mouse.onmouseup = null
       mouse.onmousemove = null
+      for (const type of ["mousemove", "mousedown", "mouseup"] as const) {
+        element.removeEventListener(type, trackPointer, true)
+      }
+      display.onresize = null
       window.clearTimeout(deadline)
       client.onerror = null
       client.onstatechange = null
