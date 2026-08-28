@@ -256,10 +256,10 @@ export const TEMPLATE_CATALOG: TemplateDef[] = [
     icon: Server,
     logo: "/certsecure-manager.svg",
     accent: "text-cyan-500",
-    description: "Linux server · Ubuntu 22.04",
+    description: "Linux server · Ubuntu 24.04",
     platform: "linux",
     category: "product",
-    cloneBase: "ub-22.04-base",
+    cloneBase: "ub-24.04-base",
   },
   {
     id: "cbom",
@@ -267,10 +267,10 @@ export const TEMPLATE_CATALOG: TemplateDef[] = [
     icon: Server,
     logo: "/cbom-secure.svg",
     accent: "text-teal-500",
-    description: "Linux server · Ubuntu 22.04",
+    description: "Linux server · Ubuntu 24.04",
     platform: "linux",
     category: "product",
-    cloneBase: "ub-22.04-base",
+    cloneBase: "ub-24.04-base",
   },
   {
     id: "codesign",
@@ -278,10 +278,10 @@ export const TEMPLATE_CATALOG: TemplateDef[] = [
     icon: Server,
     logo: "/codesign-secure.svg",
     accent: "text-indigo-500",
-    description: "Linux server · Ubuntu 22.04",
+    description: "Linux server · Ubuntu 24.04",
     platform: "linux",
     category: "product",
-    cloneBase: "ub-22.04-base",
+    cloneBase: "ub-24.04-base",
   },
 ]
 

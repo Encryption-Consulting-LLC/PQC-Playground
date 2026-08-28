@@ -702,7 +702,7 @@ export function Inspector() {
             <span>{def?.label ?? data.typeId}</span>
             <span className="text-muted-foreground">Platform</span>
             <span>
-              {def?.platform === "linux" ? "Linux · Ubuntu 22.04" : "Windows"}
+              {def?.platform === "linux" ? "Linux · Ubuntu 24.04" : "Windows"}
             </span>
             {def?.cloneBase && (
               <>

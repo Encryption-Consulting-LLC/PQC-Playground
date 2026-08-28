@@ -24,7 +24,7 @@ PKI_ROLES: tuple[PkiRole, ...] = (
 )
 PRODUCT_ROLES: tuple[PkiRole, ...] = ("certsecure", "cbom", "codesign")
 LINUX_PRODUCT_TEMPLATES = frozenset(PRODUCT_ROLES)
-LINUX_PRODUCT_BASE = "ub-22.04-base"
+LINUX_PRODUCT_BASE = "ub-24.04-base"
 LINUX_PRODUCT_GUEST_OS = "ubuntu-64"
 REQUIRED_AGENT_COMMANDS = frozenset(
     {
@@ -175,7 +175,7 @@ def deployment_profiles_from_doc(
     """Resolve guided Windows profiles plus fixed Ubuntu product profiles.
 
     Product services intentionally do not extend the operator's Windows image
-    qualification form yet. They clone the shared ``ub-22.04-base`` image and
+    qualification form yet. They clone the shared ``ub-24.04-base`` image and
     inherit only placement policy (datastore, port group, usage ceiling) from
     the legacy/global clone settings until product-specific setup is built.
     """
