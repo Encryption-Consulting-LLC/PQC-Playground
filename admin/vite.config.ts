@@ -13,6 +13,15 @@ export default defineConfig({
   base: "/admin/",
   plugins: [react(), tailwindcss()],
   resolve: {
+    // `@shared` reaches outside this app's root, so the viewer's bare `react`
+    // import resolves against `frontend/node_modules` — a physically different
+    // copy from this app's, since the two are separate pnpm projects. Vite then
+    // bundles both, and the shared component gets a React whose dispatcher
+    // (`ReactSharedInternals.H`) is never installed by the renderer: the first
+    // hook it runs throws `can't access property "useRef", H is null` the moment
+    // the remote-desktop overlay mounts. `@vitejs/plugin-react` does not dedupe
+    // for us, so say it here — this is load-bearing, not tidiness.
+    dedupe: ["react", "react-dom"],
     alias: {
       "@": path.resolve(__dirname, "./src"),
       // The remote-desktop viewer is shared with the operator app rather than
