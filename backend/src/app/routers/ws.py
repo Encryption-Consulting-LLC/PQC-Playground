@@ -205,6 +205,7 @@ async def console_session(
             parameters=rdp_parameters(
                 hostname=ticket.host,
                 username=ticket.credentials.username,
+                domain=ticket.credentials.domain,
                 password=ticket.credentials.password,
                 width=_INITIAL_WIDTH,
                 height=_INITIAL_HEIGHT,

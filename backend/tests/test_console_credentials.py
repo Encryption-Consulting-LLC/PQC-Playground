@@ -55,7 +55,11 @@ def test_domain_controller_uses_the_promoted_domain_administrator():
     creds = resolve_console_credentials(_dc_row())
 
     assert creds is not None
-    assert creds.username == "ENCON\\Administrator"
+    # Split, not qualified: RDP carries the scope in its own field. The label
+    # keeps the qualified form a human would type at a VM console.
+    assert creds.username == "Administrator"
+    assert creds.domain == "ENCON"
+    assert creds.label == "ENCON\\Administrator"
     assert creds.password == DC_PASSWORD
 
 
@@ -67,6 +71,7 @@ def test_domain_controller_without_a_netbios_name_falls_back_to_a_bare_name():
 
     assert creds is not None
     assert creds.username == "Administrator"
+    assert creds.domain == ""
 
 
 def test_domain_controller_without_a_stored_password_has_no_session():
@@ -80,9 +85,13 @@ def test_member_server_uses_the_local_administrator_from_the_image():
     creds = resolve_console_credentials(_member_row())
 
     assert creds is not None
-    # ``.\`` is load-bearing: a domain-joined guest resolves a bare name against
-    # the domain first, and this password belongs to the local SAM account.
-    assert creds.username == ".\\Administrator"
+    # ``.`` is load-bearing -- a domain-joined guest resolves a bare name against
+    # the domain first, and this password belongs to the local SAM account -- but
+    # it belongs in the domain field. Prefixed onto the username it is not a scope,
+    # just part of an account name no machine has.
+    assert creds.username == "Administrator"
+    assert creds.domain == "."
+    assert creds.label == "Administrator (local)"
     assert creds.password == LOCAL_PASSWORD
 
 

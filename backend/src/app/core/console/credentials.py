@@ -51,11 +51,24 @@ DOMAIN_CONTROLLER_TEMPLATE = "domainController"
 @dataclass(frozen=True)
 class ConsoleCredentials:
     """A resolved RDP login. ``password`` is plaintext and must not be serialized
-    to any client — ``label`` is the display-safe half."""
+    to any client — ``label`` is the display-safe half.
+
+    ``username`` is the bare account name and ``domain`` is its scope, because
+    RDP carries them as two separate fields. Qualifying the username instead --
+    ``.\\Administrator`` or ``ENCON\\Administrator`` -- makes Windows look for an
+    account by that literal name and fail the logon with STATUS_NO_SUCH_USER
+    (0xC0000064) before it ever checks the password, which reads in guacd as a
+    plain "Authentication failure (invalid credentials?)". ``label`` keeps the
+    qualified form; it is what a human should see and type at a VM console.
+    """
 
     username: str
     password: str
     label: str
+    #: RDP logon domain. ``"."`` is the local SAM, a NetBIOS name is that domain.
+    #: Defaults to empty so a ticket minted before this field existed still
+    #: redeems across a deploy rather than raising inside the socket handler.
+    domain: str = ""
 
 
 def resolve_console_credentials(row: dict) -> ConsoleCredentials | None:
@@ -89,10 +102,15 @@ def _domain_controller_credentials(agent: dict) -> ConsoleCredentials | None:
     if not password:
         return None
     netbios = config.get("netbiosName") or None
+    # ``admin_username`` stays the one formatter for the *display* label, so a
+    # session and a ``domain.join`` still can never disagree about who they are.
+    # RDP needs the two halves apart, so the domain is carried separately rather
+    # than re-derived here.
     return ConsoleCredentials(
-        username=admin_username(netbios),
+        username=LOCAL_ADMIN_ACCOUNT,
         password=password,
         label=admin_username(netbios),
+        domain=netbios or "",
     )
 
 
@@ -104,11 +122,14 @@ def _local_credentials(row: dict) -> ConsoleCredentials | None:
         password = decrypt_secret(dict(envelope))
     except SecretDecryptionError:
         return None
-    # ``.\`` scopes the login to the local SAM explicitly. Without it a
+    # ``.`` scopes the login to the local SAM explicitly. Without it a
     # domain-joined guest resolves a bare name against the domain first, and the
-    # local Administrator this password belongs to is not a domain account.
+    # local Administrator this password belongs to is not a domain account. It
+    # belongs in RDP's domain field -- prefixed onto the username it is not a
+    # scope at all, just part of an account name that does not exist.
     return ConsoleCredentials(
-        username=f".\\{LOCAL_ADMIN_ACCOUNT}",
+        username=LOCAL_ADMIN_ACCOUNT,
         password=password,
         label=f"{LOCAL_ADMIN_ACCOUNT} (local)",
+        domain=".",
     )

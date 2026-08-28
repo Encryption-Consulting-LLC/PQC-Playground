@@ -341,9 +341,21 @@ async def probe(*, host: str, port: int, timeout: float = 3.0) -> None:
 
 
 def rdp_parameters(
-    *, hostname: str, username: str, password: str, width: int, height: int
+    *,
+    hostname: str,
+    username: str,
+    password: str,
+    width: int,
+    height: int,
+    domain: str = "",
 ) -> dict[str, str]:
     """Connection parameters for a lab Windows guest.
+
+    ``username`` must be the bare account name and ``domain`` its scope (``"."``
+    for the local SAM). RDP carries the two separately, so a qualified username
+    is taken literally: Windows answers STATUS_NO_SUCH_USER (0xC0000064) without
+    checking the password, and guacd reports only "Authentication failure
+    (invalid credentials?)" -- which reads as a wrong password and is not one.
 
     ``ignore-cert`` is on because every freshly cloned Windows guest presents a
     self-signed RDP certificate that nothing in this stack has any way to sign;
@@ -356,6 +368,7 @@ def rdp_parameters(
         "hostname": hostname,
         "port": "3389",
         "username": username,
+        "domain": domain,
         "password": password,
         "security": "any",
         "ignore-cert": "true",
