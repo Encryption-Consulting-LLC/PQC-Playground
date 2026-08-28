@@ -29,6 +29,13 @@ declare module "guacamole-common-js" {
     onresize: ((width: number, height: number) => void) | null
     /** Cursor hotspot, for `Mouse.setCursor`-style local cursor rendering. */
     getCursorLayer(): unknown
+    /** Fired whenever the guest changes its pointer image. The canvas is the
+     * image and `x`/`y` are its hotspot — exactly `Mouse.setCursor`'s arguments,
+     * which is the point: the viewer forwards one to the other. */
+    oncursor: ((canvas: HTMLCanvasElement, x: number, y: number) => void) | null
+    /** Show or hide the software-rendered cursor layer. Hidden once the browser
+     * has taken the cursor image, or the page shows two pointers. */
+    showCursor(shown: boolean): void
   }
 
   export class Tunnel {
@@ -65,6 +72,9 @@ declare module "guacamole-common-js" {
     onmouseup: ((state: MouseState) => void) | null
     onmousemove: ((state: MouseState) => void) | null
     onmouseout: (() => void) | null
+    /** Render *canvas* as this element's CSS cursor, with hotspot `x`/`y`.
+     * Returns whether the browser accepted it. */
+    setCursor(canvas: HTMLCanvasElement, x: number, y: number): boolean
   }
 
   export class Keyboard {

@@ -32,6 +32,9 @@
  * - `WebSocketTunnel.connect(data)` builds its socket as `` `${url}?${data}` ``,
  *   so the token rides in `tunnelData` and `tunnelUrl` must carry no query string
  *   of its own (each app's `lib/ws.ts` has the helpers that honour this).
+ * - The guest's cursor is handed to the browser as a CSS cursor rather than left
+ *   to Guacamole's software cursor layer, or the page shows two pointers that
+ *   disagree by a round trip.
  */
 
 import Guacamole from "guacamole-common-js"
@@ -97,6 +100,19 @@ export function GuacDisplay({
     mouse.onmousedown = (state) => client.sendMouseState(state)
     mouse.onmouseup = (state) => client.sendMouseState(state)
     mouse.onmousemove = (state) => client.sendMouseState(state)
+
+    // One pointer, not two. By default Guacamole paints the guest's pointer into
+    // a software cursor layer, which then coexists with the browser's own: the
+    // two sit wherever each last heard about, so they visibly disagree by the
+    // round trip, and the browser's keeps changing shape (arrow, hand, I-beam)
+    // according to the page under the canvas rather than the desktop in it.
+    // Handing the guest's cursor image to the browser as a CSS cursor makes the
+    // guest's pointer *be* the pointer: no lag, no disagreement, no second
+    // arrow. `setCursor` reports whether the browser accepted the image; if one
+    // ever refuses, fall back to the software layer, which is the only reason
+    // that layer still exists.
+    display.oncursor = (cursorCanvas, x, y) =>
+      display.showCursor(!mouse.setCursor(cursorCanvas, x, y))
 
     const keyboard = new Guacamole.Keyboard(document)
     keyboard.onkeydown = (keysym) => {
@@ -184,6 +200,7 @@ export function GuacDisplay({
       client.onerror = null
       client.onstatechange = null
       tunnel.onerror = null
+      display.oncursor = null
       if (actionsRef) actionsRef.current = null
       try {
         client.disconnect()
