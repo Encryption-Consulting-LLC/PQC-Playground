@@ -37,4 +37,17 @@ icacls $configPath /inheritance:r /grant 'SYSTEM:F' 'Administrators:F' | Out-Nul
 # Register the SCM service (AutoStart). The runner's reboot starts it; we do NOT.
 & $exePath service install
 
+# $ErrorActionPreference only governs PowerShell errors -- a native exe's exit
+# code is not one, so without this the script runs on and reports success no
+# matter how the agent exited. That is not hypothetical: built against the MSVC
+# dynamic CRT, this binary exits 0xC0000135 (STATUS_DLL_NOT_FOUND) on an image
+# with no VC++ redistributable, printing nothing at all. Firstboot then declared
+# 'pki-executor installed' with no service registered, and the only symptom was
+# the provision op timing out 45 minutes later on "did not phone home".
+if ($LASTEXITCODE -ne 0) {
+    throw ("pki-executor service install failed (exit 0x{0:X8}). " -f $LASTEXITCODE) +
+          'A silent 0xC0000135 means a missing DLL -- check the agent''s imports ' +
+          'against what the base image ships.'
+}
+
 Write-Output 'pki-executor installed'
