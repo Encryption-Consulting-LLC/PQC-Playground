@@ -1,7 +1,7 @@
 """The byte pump between a browser's Guacamole tunnel and a guacd connection.
 
 After guacd's handshake completes neither side interprets anything, so this is
-almost pure forwarding. Three things stop it being *only* forwarding:
+almost pure forwarding. Four things stop it being *only* forwarding:
 
 * **The tunnel UUID.** ``guacamole-common-js``'s ``WebSocketTunnel`` will not
   consider itself connected until the server sends an instruction on the
@@ -11,6 +11,11 @@ almost pure forwarding. Three things stop it being *only* forwarding:
   that same empty opcode. They are the tunnel's own bookkeeping; guacd answers an
   unknown opcode by closing the connection, so they are handled here and never
   forwarded.
+* **Batching.** guacd → browser is the hot direction, and instructions there are
+  small and numerous: one repaint is an ``img``, its ``blob``s and a long run of
+  ``copy``s. They are self-delimiting and the client's tunnel parser drains a
+  whole message, so whatever a single socket read already produced is forwarded
+  as one frame rather than one frame each.
 * **Idle keepalive.** An unattended desktop produces no traffic, and a reverse
   proxy will reap a silent WebSocket (nginx's ``proxy_read_timeout`` defaults to
   60 seconds). A periodic ``nop`` — a no-op in the protocol, which the client
@@ -69,8 +74,12 @@ async def relay(
     async def to_browser() -> None:
         nonlocal last_sent
         while True:
-            instruction = await conn.read_raw()
-            await websocket.send_text(instruction)
+            # Whole instructions, batched when several are already buffered — see
+            # ``GuacdConnection.read_batch``. One frame per instruction charged a
+            # send and a browser message event for each of the hundreds a single
+            # repaint is made of; batching never waits, so a lone instruction
+            # (an input echo) still goes out on its own immediately.
+            await websocket.send_text(await conn.read_batch())
             last_sent = asyncio.get_running_loop().time()
 
     async def keepalive() -> None:

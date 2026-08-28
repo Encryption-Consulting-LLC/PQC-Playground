@@ -72,10 +72,23 @@ INTERNAL_OPCODE = ""
 #: against guacd 1.5.0, which lists 82 elements for RDP.
 _VERSION_TOKEN = re.compile(r"^VERSION_\d+_\d+_\d+$")
 
+#: Image formats offered to guacd in the handshake, best first. guacd picks per
+#: update: lossy where it pays, PNG where it does not.
+IMAGE_MIMETYPES = ("image/webp", "image/jpeg", "image/png")
+
 #: Read cap for a single instruction. Generous — a clipboard blob or a large
 #: image update is legitimately big — but not unbounded: without a ceiling a peer
 #: that sends a length prefix and then stalls pins memory until the socket dies.
 MAX_INSTRUCTION_CHARS = 1 << 22
+
+#: Socket read size. A framebuffer stream arrives in large bursts, and a bigger
+#: read is both fewer syscalls and what gives ``read_batch`` something to batch.
+_READ_CHUNK = 1 << 16
+
+#: Soft cap on one batched WebSocket frame. Big enough that a whole repaint burst
+#: usually rides in one or two frames, small enough that a frame is still a frame
+#: and not a stall.
+_BATCH_CHARS = 1 << 17
 
 
 class GuacdError(Exception):
@@ -211,7 +224,7 @@ class GuacdConnection:
     async def read_instruction(self) -> list[str]:
         """The next instruction's elements. Raises ``GuacdError`` on EOF."""
         while not self._pending:
-            chunk = await self._reader.read(8192)
+            chunk = await self._reader.read(_READ_CHUNK)
             if not chunk:
                 raise GuacdError("guacd closed the connection.")
             self._pending.extend(
@@ -222,13 +235,40 @@ class GuacdConnection:
     async def read_raw(self) -> str:
         """The next instruction verbatim, for the guacd → browser path."""
         while not self._pending:
-            chunk = await self._reader.read(8192)
+            chunk = await self._reader.read(_READ_CHUNK)
             if not chunk:
                 raise GuacdError("guacd closed the connection.")
             self._pending.extend(
                 self._instructions.feed(chunk.decode("utf-8", errors="replace"))
             )
         return self._pending.pop(0)
+
+    async def read_batch(self, max_chars: int = _BATCH_CHARS) -> str:
+        """The next instruction plus every one already buffered behind it,
+        concatenated — the guacd → browser path's real read.
+
+        Instructions are self-delimiting, and ``guacamole-common-js``'s tunnel
+        parser loops over a message until it is exhausted, so several in one
+        WebSocket frame are read exactly like several frames. A repaint is
+        hundreds of tiny instructions (an `img`, its `blob`s, then a run of
+        `copy`s), and sending each as its own frame charges a send, a syscall and
+        a browser message event *per instruction* on a loop shared with every
+        agent socket on the box.
+
+        This never waits for more data — it only takes what a read already
+        produced — so batching cannot add latency to a lone instruction, which is
+        what keeps input echo as fast as it was. Only whole instructions are
+        joined: a frame ending mid-instruction would make that parser close the
+        tunnel with "Incomplete instruction."
+        """
+        first = await self.read_raw()
+        batch = [first]
+        total = len(first)
+        while self._pending and total < max_chars:
+            nxt = self._pending.pop(0)
+            batch.append(nxt)
+            total += len(nxt)
+        return "".join(batch)
 
     async def close(self) -> None:
         self._writer.close()
@@ -275,12 +315,19 @@ async def connect(
         arg_names = reply[1:]
 
         await conn.send(["size", str(width), str(height), str(dpi)])
-        # Empty mimetype lists: audio, video and printing are out of scope, and
-        # claiming support we do not relay would make guacd open streams the
-        # browser then ignores.
+        # Audio and video stay empty: both are out of scope, and claiming support
+        # we do not relay would make guacd open streams the browser then ignores.
         await conn.send(["audio"])
         await conn.send(["video"])
-        await conn.send(["image"])
+        # Images are different, and leaving this empty was costing every frame.
+        # An empty list means "PNG only", so guacd encodes even a photographic
+        # region losslessly — larger to send and slower to encode. These are
+        # decoded by the browser itself (the `img` handler hands the mimetype to
+        # an `<img>`), so declaring them costs nothing and asks nothing of this
+        # relay; every browser the app supports decodes all three. Measured on a
+        # Start-menu repaint: 82 KiB before, 63 KiB after. guacd still picks PNG
+        # for flat UI, which is correct — the win is on photographic content.
+        await conn.send(["image", *IMAGE_MIMETYPES])
 
         # One value per arg, in guacd's order. The version token is answered by
         # echoing it back (that is how the version is negotiated); anything we

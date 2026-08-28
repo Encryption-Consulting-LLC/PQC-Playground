@@ -21,6 +21,7 @@ os.environ.setdefault(
 )
 
 from app.core.console.guacd import (  # noqa: E402
+    GuacdConnection,
     GuacdError,
     InstructionReader,
     connect,
@@ -293,6 +294,99 @@ def test_handshake_order_is_select_size_media_connect(monkeypatch):
 
     opcodes = [decode(sent)[0] for sent in guacd.received]
     assert opcodes == ["select", "size", "audio", "video", "image", "connect"]
+
+
+def test_the_handshake_offers_the_image_formats_the_browser_can_decode(monkeypatch):
+    """An empty `image` list means "PNG only", so guacd encodes photographic
+    regions losslessly — bigger and slower for every frame that contains one.
+    The browser decodes these itself, so the relay carries no extra burden."""
+
+    guacd = _FakeGuacd(["hostname"])
+    _patched_open(guacd, monkeypatch)
+
+    asyncio.run(
+        connect(
+            host="127.0.0.1",
+            port=4822,
+            protocol="rdp",
+            parameters={"hostname": "192.0.2.10"},
+            width=1024,
+            height=768,
+        )
+    )
+
+    sent = {decode(raw)[0]: decode(raw)[1:] for raw in guacd.received}
+    assert sent["image"] == ["image/webp", "image/jpeg", "image/png"]
+    # Audio and video stay empty on purpose: nothing relays those streams.
+    assert sent["audio"] == []
+    assert sent["video"] == []
+
+
+# --- batched reads -----------------------------------------------------------
+
+
+def _connection(chunks):
+    """A GuacdConnection over a reader that yields *chunks* verbatim."""
+
+    class _Reader:
+        def __init__(self):
+            self._chunks = list(chunks)
+
+        async def read(self, _n):
+            return self._chunks.pop(0).encode("utf-8") if self._chunks else b""
+
+    return GuacdConnection(_Reader(), _FakeWriter(_FakeGuacd([])))
+
+
+def test_read_batch_joins_whole_instructions_from_one_read():
+    """A repaint is hundreds of small instructions. Forwarding what a single read
+    already produced as one frame is the difference between one send and one per
+    instruction — and the client's parser drains a whole message, so it reads the
+    same either way."""
+
+    conn = _connection(["4.sync,1.1;3.nop;5.mouse,1.0,1.0,1.0;"])
+
+    assert asyncio.run(conn.read_batch()) == "4.sync,1.1;3.nop;5.mouse,1.0,1.0,1.0;"
+
+
+def test_read_batch_never_waits_for_a_second_instruction():
+    """Batching must not cost latency: an input echo arrives alone and has to go
+    out alone rather than linger for company that may never come."""
+
+    conn = _connection(["4.sync,1.1;", "3.nop;"])
+
+    assert asyncio.run(conn.read_batch()) == "4.sync,1.1;"
+
+
+def test_read_batch_holds_back_a_partial_instruction():
+    """A frame ending mid-instruction makes ``guacamole-common-js``'s tunnel close
+    with "Incomplete instruction." — its parser has no cross-message buffer. Only
+    complete instructions may be joined."""
+
+    conn = _connection(["3.nop;5.mou", "se,1.0,1.0,1.0;"])
+
+    assert asyncio.run(conn.read_batch()) == "3.nop;"
+    assert asyncio.run(conn.read_batch()) == "5.mouse,1.0,1.0,1.0;"
+
+
+def test_read_batch_stops_at_the_size_cap():
+    """One frame stays a frame: a cap keeps a long burst from becoming a single
+    enormous message the browser must parse before it can paint anything."""
+
+    instruction = encode(["blob", "1", "x" * 4096])
+    conn = _connection([instruction * 64])
+
+    batch = asyncio.run(conn.read_batch(max_chars=len(instruction) * 2 + 1))
+
+    # The cap is a floor, not a ceiling: it stops *after* the instruction that
+    # crossed it, because instructions are indivisible.
+    assert batch == instruction * 3
+
+    # The 61 left over drain in further capped frames, not one giant one the
+    # browser would have to parse in full before it could paint anything.
+    rest = asyncio.run(conn.read_batch())
+    assert 0 < len(rest) < len(instruction) * 61
+    assert rest == instruction * (len(rest) // len(instruction))
 
 
 def test_an_error_in_place_of_ready_is_raised_not_ignored(monkeypatch):
