@@ -74,13 +74,36 @@ export interface PlanStateEvent {
   ops: Record<string, OpRunState>
 }
 
+/**
+ * Server-sent idle heartbeat (backend `ws.py::_HEARTBEAT`). Carries nothing —
+ * its only job is to arrive, proving the socket is still whole and re-arming
+ * the silence watchdog below.
+ */
+export interface PingEvent {
+  type: "ping"
+}
+
 export type JobMessage =
   | QueuedEvent
   | RunningEvent
   | ProgressEvent
   | PlanStateEvent
+  | PingEvent
   | DoneEvent
   | ErrorEvent
+
+/**
+ * How long the job socket may say nothing before we treat it as dead.
+ *
+ * The backend heartbeats every `job_keepalive_s` (20s), so three missed beats
+ * is a real failure rather than jitter. This watchdog is the half of the fix
+ * that recovers rather than prevents: a WebSocket reaped by a proxy does not
+ * reliably surface as a `close` event, and `onclose` was the only thing this
+ * client ever reacted to — so a silently dropped socket produced no error, no
+ * reconnect, and a deploy that had already finished server-side sat "deploying"
+ * on the canvas for 8h31m until the page was reloaded.
+ */
+const JOB_SOCKET_SILENCE_MS = 60_000
 
 export interface JobSocketHandlers {
   /** Job accepted but waiting on the worker pool's concurrency cap. */
@@ -134,8 +157,35 @@ export function openJobSocket(
 ): () => void {
   const ws = new WebSocket(wsUrl(URLS.ws.jobs(jobId), token))
   let settled = false
+  let watchdog: ReturnType<typeof setTimeout> | undefined
+
+  // Reported as a transport failure (`status: 0`) with the generic abnormal
+  // close code, because that is exactly what it is — the caller's existing
+  // retry ladder reconnects, and the reconnect replays the snapshot (or the
+  // persisted plan run), which is what finally delivers the terminal frame.
+  const onSilence = () => {
+    if (settled) return
+    settled = true
+    ws.onmessage = null
+    ws.onclose = null
+    ws.close()
+    handlers.onError?.({
+      type: "error",
+      status: 0,
+      detail: "Progress connection went silent — reconnecting.",
+      code: 1006,
+    })
+  }
+
+  const armWatchdog = () => {
+    clearTimeout(watchdog)
+    if (!settled) watchdog = setTimeout(onSilence, JOB_SOCKET_SILENCE_MS)
+  }
+
+  armWatchdog()
 
   ws.onmessage = (ev) => {
+    armWatchdog()
     let msg: JobMessage
     try {
       msg = JSON.parse(ev.data) as JobMessage
@@ -143,6 +193,9 @@ export function openJobSocket(
       return
     }
     switch (msg.type) {
+      case "ping":
+        // Nothing to do — arriving was the point.
+        break
       case "queued":
         handlers.onQueued?.(msg)
         break
@@ -157,10 +210,12 @@ export function openJobSocket(
         break
       case "done":
         settled = true
+        clearTimeout(watchdog)
         handlers.onDone?.(msg)
         break
       case "error":
         settled = true
+        clearTimeout(watchdog)
         handlers.onError?.(msg)
         break
     }
@@ -171,6 +226,7 @@ export function openJobSocket(
   // rides along: a rejected token (4401) or an expired job (4404) will never
   // recover, and retrying them as if they were a blip hides the real cause.
   ws.onclose = (ev) => {
+    clearTimeout(watchdog)
     if (!settled) {
       settled = true
       handlers.onError?.({
@@ -183,6 +239,7 @@ export function openJobSocket(
   }
 
   return () => {
+    clearTimeout(watchdog)
     ws.onmessage = null
     ws.onclose = null
     ws.close()
