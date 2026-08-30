@@ -209,6 +209,11 @@ class SequenceEngine:
         dispatched_at = self._now_ms()
         result = self._dispatch_with_retry(step, node.agent_vm_id, params)
 
+        # Before artifacts are lifted, so anything derived from the result is
+        # derived from the settled one.
+        if step.settle_predicate is not None:
+            result = self._settle(step, node.agent_vm_id, ctx, result)
+
         for key in step.produces:
             content = result.get("contentB64")
             if not isinstance(content, str):
@@ -383,6 +388,66 @@ class SequenceEngine:
             expect_disconnect=step.expects_disconnect,
         )
 
+    def _settle(self, step: Step, vm_id: str, ctx: RunContext, result: dict) -> dict:
+        """Re-dispatch *step* until its own result satisfies ``settle_predicate``.
+
+        Returns the settled result, or the last one seen when the window closes.
+        **Never raises**: a window that closes without settling is not a failure,
+        it is the answer — see ``Step.settle_predicate`` for why that distinction
+        is the whole point of this existing alongside ``verify``.
+
+        The motivating case is a freshly configured Online Responder. It needs a
+        moment to enrol its signing certificate and load CRL information, and the
+        health probe that reads it runs seconds later; without this the gate
+        sampled a responder that had not warmed up yet and reported a fault that
+        cured itself. Waiting is right, but failing is not — OCSP is advisory,
+        and a lab that revokes over CRL must still be able to ship.
+        """
+        predicate = step.settle_predicate
+        assert predicate is not None
+        if predicate(result):
+            return result
+
+        deadline = self._now_ms() + step.settle_window_s * 1000
+        attempt = 0
+        while self._now_ms() < deadline:
+            self._sleep(_VERIFY_BACKOFF[min(attempt, len(_VERIFY_BACKOFF) - 1)])
+            attempt += 1
+            try:
+                # A fresh job key per attempt, for the same reason verify probes
+                # take one: the key is the dispatch idempotency key and a
+                # terminal snapshot for the old one would short-circuit this.
+                candidate = self._dispatch(
+                    f"{step.id}.settle.{attempt}",
+                    vm_id,
+                    step.command,
+                    step.resolve_params(ctx),
+                    role=self._role,
+                    secret_keys=step.secret_keys,
+                    timeout_s=step.timeout_s,
+                )
+            except Exception as exc:  # noqa: BLE001 - readiness boundary
+                # A failed re-dispatch is not a new fact about the target, so
+                # keep the last real result rather than overwriting it with a
+                # transport failure.
+                logger.info(
+                    "settle probe %s attempt %d failed: %s", step.id, attempt, exc
+                )
+                continue
+            result = candidate
+            if predicate(result):
+                logger.info(
+                    "step %s settled after %d re-dispatch(es)", step.id, attempt
+                )
+                return result
+
+        logger.info(
+            "step %s did not settle within %ds — keeping the last result",
+            step.id,
+            step.settle_window_s,
+        )
+        return result
+
     def _run_verify(self, step: Step, vm_id: str, ctx: RunContext) -> None:
         probe = step.verify
         assert probe is not None
@@ -436,9 +501,13 @@ def deterministic_step_job_id(plan_job_id: str, op_id: str, step_id: str) -> str
 
 
 #: Job-key suffixes this module mints for a *re*dispatch of a step the client
-#: already has one row for. ``.retry.{n}`` / ``.verify.{n}`` are matched on the
-#: marker, since the attempt number varies.
-_REDISPATCH_MARKERS = (".retry.", ".rebootrecover", ".postreboot")
+#: already has one row for. ``.retry.{n}`` / ``.settle.{n}`` / ``.verify.{n}``
+#: are matched on the marker, since the attempt number varies.
+#:
+#: ``.settle.`` belongs here rather than with ``_VERIFY_MARKER``: it re-runs the
+#: step itself, so it reports against that step's row — unlike a verify probe,
+#: which is a different command and gets a row of its own.
+_REDISPATCH_MARKERS = (".retry.", ".rebootrecover", ".postreboot", ".settle.")
 _VERIFY_MARKER = ".verify."
 
 

@@ -514,3 +514,26 @@ def test_the_pki_cname_is_applied_before_the_responder_is_configured():
     # ...and the CertEnroll share still comes first, since that verify fetches
     # from it.
     assert ids.index("iis-web") < ids.index("dns-cname-verify-web")
+
+
+def test_the_lab_health_probe_waits_for_the_responder_to_warm_up():
+    """Ordering removes the known cause; this covers the residual race.
+
+    `certificate-health` runs seconds after `ocsp-config`, and a just-configured
+    responder needs a moment to enrol its signing certificate and load CRLs. It
+    settles on a real OCSP answer rather than sampling once — and because a
+    settle window closing is not a failure, a responder that never warms up
+    still ships the lab with an advisory warning instead of stranding it.
+    """
+    by_id = {s.id: s for s in op_sequence("webServerCert", _web_ctx())}
+    probe = by_id["certificate-health"]
+
+    assert probe.settle_predicate is not None
+    assert probe.settle_predicate({"ocsp": {"ok": True}}) is True
+    assert probe.settle_predicate({"ocsp": {"ok": False}}) is False
+    assert probe.settle_predicate({}) is False
+    # Bounded well short of the responder's own 15-minute refresh: waiting that
+    # out would add a quarter hour to a deploy to improve a warning.
+    assert 0 < probe.settle_window_s <= 300
+    # A settled step must be safe to re-run; this one is a read-only probe.
+    assert probe.command == "cert.verify"

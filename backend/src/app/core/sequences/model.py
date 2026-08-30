@@ -114,6 +114,22 @@ class Step:
     verify: "Step | None" = None
     verify_predicate: VerifyPredicate | None = None
     verify_window_s: int = 600
+    #: Re-dispatch *this* step until its **own** result satisfies this, keeping
+    #: the last result either way.
+    #:
+    #: Distinct from ``verify`` in the one way that matters: a ``verify`` window
+    #: closing raises and fails the op, while a ``settle`` window closing is not
+    #: an error at all — it simply means the condition never settled, and the
+    #: last result stands for a downstream advisory gate to interpret. That is
+    #: the difference between "this lab is broken" and "this lab shipped with a
+    #: warning", and it is why an advisory fact (OCSP, which a lab revoking over
+    #: CRL can live without) can be waited for without a slow responder being
+    #: able to strand a deployment.
+    #:
+    #: The step is re-dispatched verbatim, so only ever set this on a step that
+    #: is safe to run repeatedly — in practice a read-only probe.
+    settle_predicate: VerifyPredicate | None = None
+    settle_window_s: int = 300
     #: Backend-local result aggregator. When present, ``command`` is the
     #: display/metric label only and no agent dispatch occurs.
     aggregate: ResultAggregator | None = None

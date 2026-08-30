@@ -82,6 +82,13 @@ _OCSP_RETRY = (10, 20, 40, 60, 90)
 # varies 2.8x with load. A dispatch timeout is also the one failure a retry
 # schedule deliberately cannot rescue, so headroom here is worth more than
 # elsewhere.
+#: How long the lab health probe will wait for a just-configured Online
+#: Responder to start answering. Warm-up is seconds once the `pki` CNAME is in
+#: place, so this is generous; it is deliberately far short of the responder's
+#: own `ocspRefreshMinutes` (15) retry, because waiting that out would add a
+#: quarter hour to a deployment to improve a warning nobody is blocked on.
+_OCSP_SETTLE_S = 180
+
 _CA_INSTALL_S = 2700
 _ROLE_CHANGE_S = 2700
 _SERVICE_OP_S = 900
@@ -990,6 +997,15 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
                 "expectedSignatureOid": ML_DSA_87_SIGNATURE_OID,
             },
             timeout_s=_SERVICE_OP_S,
+            # This runs seconds after the responder was configured, and a
+            # freshly configured one needs a moment to enrol its signing
+            # certificate and load CRL information. `certutil -verify -urlfetch`
+            # is read-only, so re-running it until OCSP answers is free of side
+            # effects — and when it never does, the last result stands and the
+            # advisory gate reports it rather than the deploy failing (see
+            # `Step.settle_predicate`).
+            settle_predicate=lambda r: (r.get("ocsp") or {}).get("ok") is True,
+            settle_window_s=_OCSP_SETTLE_S,
         ),
         Step(
             id="enterprise-pki-health",

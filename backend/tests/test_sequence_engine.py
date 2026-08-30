@@ -1107,3 +1107,120 @@ def test_failed_recovery_reboot_surfaces_the_original_failure():
     with pytest.raises(SequenceError, match="prerequisites") as excinfo:
         engine.run([_forest_step()], _ctx())
     assert "never came back" in str(excinfo.value.__cause__)
+
+
+def _settling_engine(results_by_attempt, clock=None):
+    """An engine whose single step returns each of *results_by_attempt* in turn."""
+    clock = clock or FakeClock()
+    calls = []
+
+    def dispatch(
+        job_key,
+        vm_id,
+        command,
+        params,
+        *,
+        role,
+        secret_keys,
+        timeout_s,
+        expect_disconnect=False,
+    ):
+        calls.append(job_key)
+        index = min(len(calls) - 1, len(results_by_attempt) - 1)
+        outcome = results_by_attempt[index]
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
+    engine = SequenceEngine(
+        dispatch=dispatch,
+        wait_for_reconnect=lambda *a, **k: None,
+        sleep=clock.sleep,
+        now_ms=clock.now_ms,
+    )
+    return engine, calls
+
+
+def _settling_step(settle_window_s=180):
+    return Step(
+        id="certificate-health",
+        command="cert.verify",
+        target="primary",
+        settle_predicate=lambda r: r.get("ready") is True,
+        settle_window_s=settle_window_s,
+    )
+
+
+def test_a_step_that_is_already_settled_is_not_redispatched():
+    engine, calls = _settling_engine([{"ready": True}])
+
+    results = engine.run([_settling_step()], _ctx())
+
+    assert calls == ["certificate-health"]
+    assert results["certificate-health"] == {"ready": True}
+
+
+def test_a_step_is_redispatched_until_its_own_result_settles():
+    engine, calls = _settling_engine(
+        [{"ready": False}, {"ready": False}, {"ready": True}]
+    )
+
+    results = engine.run([_settling_step()], _ctx())
+
+    # The recorded result is the settled one, not the first sample — the whole
+    # point, since it is what the downstream health aggregate reads.
+    assert results["certificate-health"] == {"ready": True}
+    assert calls == [
+        "certificate-health",
+        "certificate-health.settle.1",
+        "certificate-health.settle.2",
+    ]
+
+
+def test_a_window_that_closes_without_settling_is_not_a_failure():
+    """The distinction from `verify`, and the reason this primitive exists.
+
+    A `verify` window closing raises and fails the op. Here it must not: the
+    fact simply never settled, the last result stands, and an advisory gate
+    downstream decides what to say about it. OCSP is advisory precisely so a
+    lab that revokes over CRL can still ship.
+    """
+    engine, calls = _settling_engine([{"ready": False}])
+
+    results = engine.run([_settling_step()], _ctx())
+
+    assert results["certificate-health"] == {"ready": False}
+    # It really did keep trying, and it really did stop.
+    assert len(calls) > 1
+    assert all(c.startswith("certificate-health") for c in calls)
+
+
+def test_settling_is_bounded_by_its_window():
+    clock = FakeClock()
+    engine, calls = _settling_engine([{"ready": False}], clock=clock)
+
+    engine.run([_settling_step(settle_window_s=60)], _ctx())
+    short = len(calls)
+
+    clock2 = FakeClock()
+    engine2, calls2 = _settling_engine([{"ready": False}], clock=clock2)
+    engine2.run([_settling_step(settle_window_s=600)], _ctx())
+
+    assert len(calls2) > short
+    assert clock.t <= 60_000 + 60_000
+
+
+def test_a_failed_redispatch_does_not_overwrite_the_last_real_result():
+    """A transport failure is not a new fact about the target."""
+    engine, _calls = _settling_engine(
+        [{"ready": False, "detail": "measured"}, SequenceError("agent unreachable")]
+    )
+
+    results = engine.run([_settling_step(settle_window_s=60)], _ctx())
+
+    assert results["certificate-health"]["detail"] == "measured"
+
+
+def test_settle_redispatches_report_against_the_steps_own_row():
+    """Unlike a verify probe, this re-runs the step, so it is not a new row."""
+    assert visible_step_id("certificate-health.settle.3") == "certificate-health"
