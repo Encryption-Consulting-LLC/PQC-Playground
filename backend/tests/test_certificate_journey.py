@@ -61,17 +61,41 @@ def test_certificate_journey_projects_urls_dns_artifacts_and_failures() -> None:
     assert journey["signatureAlgorithm"] == "2.16.840.1.101.3.4.3.19"
 
 
-def test_the_ocsp_hop_names_the_responder_status_behind_the_symptom() -> None:
-    """A missing OCSP response is the symptom; the endpoint's 500 is the cause."""
+def test_the_ocsp_hop_names_the_responder_error_behind_the_symptom() -> None:
+    """A missing OCSP response is the symptom; the responder's error is the cause."""
     results = {
         "certificate-health": {"chain": {"ok": True}, "ocsp": {"ok": False}},
-        "ocsp-health": {"configured": True, "http_status": 500},
+        "ocsp-health": {
+            "configured": True,
+            "configurations": [
+                {"identifier": "EC-Issuing-CA", "errorCode": 0x80092013}
+            ],
+        },
     }
 
     journey = build_certificate_journey(_ctx(), results)
 
     assert journey["hops"][4]["failureReason"] == (
-        "The responder at http://pki.encon.pki/ocsp returned HTTP 500."
+        "The responder at http://pki.encon.pki/ocsp reports error code 0x80092013."
+    )
+
+
+def test_the_ocsp_hop_does_not_blame_a_bare_get_500() -> None:
+    """`ocsp.verify` GETs /ocsp with no OCSP request and a healthy responder
+    answers 500, so quoting it named a cause that was not one."""
+    results = {
+        "certificate-health": {"chain": {"ok": True}, "ocsp": {"ok": False}},
+        "ocsp-health": {
+            "configured": True,
+            "http_status": 500,
+            "configurations": [{"identifier": "EC-Issuing-CA", "errorCode": 0}],
+        },
+    }
+
+    journey = build_certificate_journey(_ctx(), results)
+
+    assert journey["hops"][4]["failureReason"] == (
+        "The responder did not return a verified OCSP status."
     )
 
 

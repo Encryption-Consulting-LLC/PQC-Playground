@@ -45,16 +45,25 @@ def build_certificate_journey(
     cdp_ok, cdp_failure = _status(
         cert, "cdp", "CDP could not retrieve fresh base and delta CRLs."
     )
-    # The probe's missing OCSP response is a symptom; the responder's own HTTP
-    # status is the cause, and it is the difference between "look at the probe"
-    # and "look at the responder". Name it whenever the endpoint reported one.
-    responder_status = (results.get("ocsp-health") or {}).get("http_status")
+    # The probe's missing OCSP response is a symptom; the responder's own error
+    # code is the cause, and it is the difference between "look at the probe"
+    # and "look at the responder". Name it whenever the responder reported one.
+    #
+    # Deliberately not the HTTP status: `ocsp.verify` probes with a bare
+    # `GET /ocsp` and no OCSP request, which the responder answers with 500 when
+    # perfectly healthy — so quoting it here named a cause that was not one.
+    responder_errors = [
+        c.get("errorCode")
+        for c in ((results.get("ocsp-health") or {}).get("configurations") or [])
+        if isinstance(c, dict) and isinstance(c.get("errorCode"), int)
+    ]
+    responder_error = next((code for code in responder_errors if code != 0), None)
     ocsp_ok, ocsp_failure = _status(
         cert,
         "ocsp",
-        f"The responder at http://{ctx.pki_host or web.hostname}/ocsp returned "
-        f"HTTP {responder_status}."
-        if isinstance(responder_status, int) and not 200 <= responder_status < 300
+        f"The responder at http://{ctx.pki_host or web.hostname}/ocsp reports "
+        f"error code {hex(responder_error)}."
+        if responder_error is not None
         else "The responder did not return a verified OCSP status.",
     )
     chain_ok, chain_failure = _status(

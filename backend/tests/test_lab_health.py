@@ -184,17 +184,46 @@ def test_cdp_is_unassertable_without_observed_names() -> None:
     assert "cdp" not in report["checks"]["enterprisePki"]["containers"]["detail"]
 
 
-def test_a_configured_responder_that_errors_is_reported_by_status() -> None:
-    """`configured` proves the config exists, not that the responder can answer."""
+def test_a_configured_responder_that_errors_is_reported_by_its_error_code() -> None:
+    """`configured` proves the config exists, not that the responder can answer.
+
+    The responder's own per-configuration `ErrorCode` is what says whether it
+    can serve that CA — unlike an HTTP status, which for a bare `GET /ocsp`
+    carrying no OCSP request is 500 on a perfectly healthy responder.
+    """
     results = deepcopy(_healthy_results())
-    results["ocsp-health"]["http_status"] = 500
+    results["ocsp-health"]["configurations"] = [
+        {"identifier": "EC-Issuing-CA", "errorCode": 0x80092013}
+    ]
 
     report = aggregate_lab_health(_runtime(), results)
 
     assert "Online Responder" in "; ".join(report["warnings"])
-    assert "HTTP 500" in "; ".join(report["warnings"])
+    assert "0x80092013" in "; ".join(report["warnings"])
     assert report["checks"]["ocspResponder"]["ok"] is False
-    assert report["checks"]["ocspResponder"]["detail"]["httpStatus"] == 500
+    assert report["checks"]["ocspResponder"]["detail"]["errorCodes"] == [0x80092013]
+
+
+def test_a_bare_get_500_no_longer_condemns_a_healthy_responder() -> None:
+    """The regression this replaces.
+
+    `ocsp.verify` probes with a bare `GET /ocsp` and no OCSP request, which
+    Microsoft's Online Responder answers with 500 by design. Asserting 2xx of
+    that was a check no working responder could pass, so it warned on every
+    deployment — and sitting beside a genuine OCSP fault it read as
+    corroboration instead of noise.
+    """
+    results = deepcopy(_healthy_results())
+    results["ocsp-health"]["http_status"] = 500
+    results["ocsp-health"]["configurations"] = [
+        {"identifier": "EC-Issuing-CA", "errorCode": 0}
+    ]
+
+    report = aggregate_lab_health(_runtime(), results)
+
+    assert report["checks"]["ocspResponder"]["ok"] is True
+    assert report["warnings"] == []
+    assert report["healthy"] is True
 
 
 def test_a_dead_responder_does_not_fail_a_lab_that_revokes_over_crl() -> None:
@@ -202,7 +231,9 @@ def test_a_dead_responder_does_not_fail_a_lab_that_revokes_over_crl() -> None:
     results = deepcopy(_healthy_results())
     results["certificate-health"]["ocsp"] = {"ok": False, "verified_responses": 0}
     results["certificate-health"]["revocation_freshness"] = {"ok": False}
-    results["ocsp-health"]["http_status"] = 500
+    results["ocsp-health"]["configurations"] = [
+        {"identifier": "EC-Issuing-CA", "errorCode": 0x80092013}
+    ]
 
     report = aggregate_lab_health(_runtime(), results)
 
@@ -218,7 +249,9 @@ def test_a_dead_responder_is_fatal_when_crl_revocation_is_also_broken() -> None:
     results = deepcopy(_healthy_results())
     results["certificate-health"]["cdp"] = {"ok": False}
     results["certificate-health"]["ocsp"] = {"ok": False}
-    results["ocsp-health"]["http_status"] = 500
+    results["ocsp-health"]["configurations"] = [
+        {"identifier": "EC-Issuing-CA", "errorCode": 0x80092013}
+    ]
 
     report = aggregate_lab_health(_runtime(), results)
 
@@ -231,18 +264,20 @@ def test_a_dead_responder_is_fatal_when_crl_revocation_is_also_broken() -> None:
 
 def test_a_serving_responder_passes_the_gate() -> None:
     results = deepcopy(_healthy_results())
-    results["ocsp-health"]["http_status"] = 200
+    results["ocsp-health"]["configurations"] = [
+        {"identifier": "EC-Issuing-CA", "errorCode": 0}
+    ]
 
     report = aggregate_lab_health(_runtime(), results)
 
     assert report["healthy"] is True
 
 
-def test_an_agent_that_reports_no_endpoint_status_is_not_penalised() -> None:
+def test_an_agent_that_reports_no_error_code_is_not_penalised() -> None:
     report = aggregate_lab_health(_runtime(), _healthy_results())
 
     assert report["checks"]["ocspResponder"]["ok"] is True
-    assert report["checks"]["ocspResponder"]["detail"]["httpStatus"] is None
+    assert report["checks"]["ocspResponder"]["detail"]["errorCodes"] == []
 
 
 def test_wrong_runtime_identity_fails_the_gate() -> None:
@@ -263,9 +298,11 @@ def test_the_recorded_prod_run_now_passes_with_one_ocsp_warning() -> None:
     one or more AD enterprise PKI containers are unhealthy". Only the first named
     a real fault: the container check compared CA common names against ``CN=CDP``'s
     host-named children, and freshness was derived from the same OCSP failure. The
-    responder answered HTTP 500 with no signing certificate bound, while its CRLs
-    verified 4 base and 4 delta -- so the lab revokes, and the gate should say so
-    without stranding the deploy.
+    responder's HTTP 500 was never evidence of anything: `ocsp.verify` probes with
+    a bare `GET /ocsp` carrying no OCSP request, which Microsoft's Online Responder
+    answers with 500 whether or not it is healthy, so that warning fired on every
+    deployment. Its CRLs verified 4 base and 4 delta -- so the lab revokes, and the
+    gate should say so without stranding the deploy.
     """
     results = json.loads((_FIXTURES / "lab_health_ocsp_500.json").read_text())
     nodes = {
@@ -290,9 +327,10 @@ def test_the_recorded_prod_run_now_passes_with_one_ocsp_warning() -> None:
 
     assert report["healthy"] is True
     assert report["failures"] == []
+    # Only the real fault is left: the recorded agent reported no per-config
+    # error code, and the bare-GET 500 no longer condemns the responder.
     assert report["warnings"] == [
         "the issued probe did not receive a verified OCSP response",
-        "the Online Responder at http://pki.encon.pki/ocsp returned HTTP 500",
     ]
     # The two misattributed messages are gone, and for the right reasons.
     assert report["checks"]["enterprisePki"]["containers"]["ok"] is True

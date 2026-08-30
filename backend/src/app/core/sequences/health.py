@@ -211,31 +211,42 @@ def aggregate_lab_health(
         )
 
     # A revocation configuration that reads back over COM proves only that the
-    # configuration exists, not that the responder can answer with it. A lab has
-    # shipped with `configured: true` alongside `http_status: 500` -- the responder
-    # had no signing certificate bound, so every request failed and the only
-    # symptom the gate reported was the downstream probe's missing OCSP response.
-    # Assert the endpoint too, and name the status: it is the actual fault.
+    # configuration exists, not that the responder can answer with it -- so this
+    # gate asserts the responder's own status too, and names it.
+    #
+    # What it must NOT assert is an HTTP status: the agent's probe is a bare
+    # `GET /ocsp` carrying no OCSP request, and Microsoft's responder answers
+    # that with 500 whether or not it is healthy. Requiring 2xx of it was a
+    # check no working responder could ever pass -- it fired on every single
+    # deployment, and because the real OCSP fault of the day sat right beside
+    # it, it read as corroboration rather than as the false alarm it was. The
+    # real evidence that OCSP answers is the downstream probe's verified
+    # response (`ocsp_ok` above, from `certutil -verify -urlfetch`).
     ocsp_result = results.get("ocsp-health", {})
     pki_host = runtime.ctx.pki_host or runtime.ctx.node("web").hostname
     ocsp_endpoint = f"http://{pki_host}/ocsp"
     ocsp_configured = ocsp_result.get("configured") is True
-    responder_status = ocsp_result.get("http_status")
-    # An agent that predates the endpoint probe reports no status; assert only
-    # what was actually measured.
-    responder_serving = (
-        200 <= responder_status < 300 if isinstance(responder_status, int) else True
-    )
+    # Per-configuration `ErrorCode` from the responder itself: 0 is healthy, and
+    # anything else is the responder saying it cannot serve that CA. An agent
+    # that predates this field reports nothing, so assert only what was measured.
+    configurations = ocsp_result.get("configurations") or []
+    error_codes = [
+        c.get("errorCode")
+        for c in configurations
+        if isinstance(c, dict) and isinstance(c.get("errorCode"), int)
+    ]
+    responder_healthy = all(code == 0 for code in error_codes)
     responder = check(
         "responder",
-        ocsp_configured and responder_serving,
-        f"the Online Responder at {ocsp_endpoint} returned HTTP {responder_status}"
+        ocsp_configured and responder_healthy,
+        f"the Online Responder at {ocsp_endpoint} reports "
+        f"error code {next((hex(c) for c in error_codes if c != 0), 'unknown')}"
         if ocsp_configured
         else "Online Responder configuration is missing or unreadable",
         {
             "endpoint": ocsp_endpoint,
-            "httpStatus": responder_status,
-            "configurations": ocsp_result.get("configurations"),
+            "errorCodes": error_codes,
+            "configurations": configurations,
         },
         fatal=not crl_fallback,
     )
