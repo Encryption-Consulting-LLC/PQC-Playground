@@ -846,6 +846,49 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
             retry_delays_s=_FEATURE_RETRY,
             reboot_recovery_signatures=_SERVER_MANAGER_STALL,
         ),
+    ]
+
+    # The CNAME has to exist *before* the responder is configured, not after.
+    #
+    # `ocsp-config` hands the Online Responder its CRL URLs on `pki.<domain>`,
+    # and the revocation provider resolves and fetches them immediately. When
+    # this block ran after it, that first fetch hit a name that would not exist
+    # for another four seconds: the provider logged `ERROR_OBJECT_NOT_FOUND`,
+    # was left holding no CRL information at all, and would not retry until its
+    # `ocspRefreshMinutes` (15) came round. Every health probe in the seconds
+    # after therefore asked a responder that could not answer, and the lab
+    # shipped warning that OCSP had failed on a responder that was fine —
+    # fifteen minutes later the refresh succeeded and it answered normally.
+    # So this is an ordering dependency, not a cosmetic grouping.
+    cname_records = _records_for(ctx, ctx.node(PRIMARY).node_id, ("CNAME",))
+    if cname_records and DC in ctx.nodes:
+        steps.append(
+            Step(
+                id="dns-cname-apply",
+                command="dns.apply_resources",
+                target=DC,
+                params=lambda rt: _dns_params(ctx, cname_records),
+                retry_delays_s=_DNS_RETRY,
+            )
+        )
+        http_url = f"http://{ctx.pki_host}/CertEnroll/"
+        for target, suffix in ((PRIMARY, "web"), (CA, "ca")):
+            if target not in ctx.nodes:
+                continue
+            steps.append(
+                Step(
+                    id=f"dns-cname-verify-{suffix}",
+                    command="dns.verify",
+                    target=target,
+                    params=lambda rt, url=http_url: _dns_params(
+                        ctx, cname_records, http_url=url
+                    ),
+                    timeout_s=300,
+                    retry_delays_s=_DNS_RETRY,
+                )
+            )
+
+    steps += [
         Step(
             id="ocsp-install",
             command="ocsp.install",
@@ -897,35 +940,6 @@ def _web_server_cert_sequence(ctx: RunContext) -> list[Step]:
         ),
     ]
 
-    # Apply the planned CNAME on the authoritative DC, then prove both name
-    # resolution and the CertEnroll HTTP hop from the web host and issuing CA.
-    cname_records = _records_for(ctx, ctx.node(PRIMARY).node_id, ("CNAME",))
-    if cname_records and DC in ctx.nodes:
-        steps.append(
-            Step(
-                id="dns-cname-apply",
-                command="dns.apply_resources",
-                target=DC,
-                params=lambda rt: _dns_params(ctx, cname_records),
-                retry_delays_s=_DNS_RETRY,
-            )
-        )
-        http_url = f"http://{ctx.pki_host}/CertEnroll/"
-        for target, suffix in ((PRIMARY, "web"), (CA, "ca")):
-            if target not in ctx.nodes:
-                continue
-            steps.append(
-                Step(
-                    id=f"dns-cname-verify-{suffix}",
-                    command="dns.verify",
-                    target=target,
-                    params=lambda rt, url=http_url: _dns_params(
-                        ctx, cname_records, http_url=url
-                    ),
-                    timeout_s=300,
-                    retry_delays_s=_DNS_RETRY,
-                )
-            )
     steps.append(
         Step(
             id="enroll-health-probe",

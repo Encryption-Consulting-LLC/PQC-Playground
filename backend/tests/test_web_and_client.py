@@ -101,12 +101,12 @@ def test_web_server_cert_sequence_shape():
     commands = [s.command for s in steps]
     assert commands == [
         "iis.setup_certenroll",
-        "ocsp.install",
-        "cert.enroll",
-        "ocsp.configure_revocation",
         "dns.apply_resources",
         "dns.verify",
         "dns.verify",
+        "ocsp.install",
+        "cert.enroll",
+        "ocsp.configure_revocation",
         "cert.enroll",
         "cert.verify",
         "pki.verify",
@@ -491,3 +491,26 @@ def test_client_join_appends_enroll_and_verify():
 def test_client_join_without_a_ca_skips_enrollment():
     steps = op_sequence("domainJoin", _client_ctx(with_ca=False))
     assert all(s.command != "cert.enroll" for s in steps)
+
+
+def test_the_pki_cname_is_applied_before_the_responder_is_configured():
+    """Ordering, not grouping — the responder resolves its CRL URLs at once.
+
+    `ocsp.configure_revocation` hands the Online Responder CRL URLs on
+    `pki.<domain>`, and its revocation provider fetches them immediately. With
+    the CNAME applied afterwards that first fetch hit a name that did not exist
+    yet: the provider was left with no CRL information and would not retry for
+    `ocspRefreshMinutes`, so every health probe in the seconds that followed
+    asked a responder that could not answer and the lab shipped reporting an
+    OCSP failure on a responder that was fine.
+    """
+    steps = op_sequence("webServerCert", _web_ctx())
+    ids = [s.id for s in steps]
+
+    assert ids.index("dns-cname-apply") < ids.index("ocsp-config")
+    # The HTTP hop is proven before it is depended on, too.
+    for suffix in ("web", "ca"):
+        assert ids.index(f"dns-cname-verify-{suffix}") < ids.index("ocsp-config")
+    # ...and the CertEnroll share still comes first, since that verify fetches
+    # from it.
+    assert ids.index("iis-web") < ids.index("dns-cname-verify-web")
