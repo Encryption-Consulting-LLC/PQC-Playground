@@ -71,13 +71,29 @@ export interface ErrorEvent {
   code?: number
 }
 
+/** Server-sent idle heartbeat (backend `ws.py::_HEARTBEAT`) — discarded, but
+ * its arrival re-arms the silence watchdog below. */
+export interface PingEvent {
+  type: "ping"
+}
+
 export type JobMessage =
   | QueuedEvent
   | RunningEvent
   | ProgressEvent
   | PlanStateEvent
+  | PingEvent
   | DoneEvent
   | ErrorEvent
+
+/**
+ * How long the job socket may say nothing before we treat it as dead. The
+ * backend heartbeats every 20s, so three missed beats is a real failure and
+ * not jitter. `onclose` alone is not enough: a WebSocket reaped by a proxy
+ * does not reliably surface as a close event, and a client holding a half-open
+ * socket never learns the job ended.
+ */
+const JOB_SOCKET_SILENCE_MS = 60_000
 
 export interface JobSocketHandlers {
   onQueued?: (event: QueuedEvent) => void
@@ -125,8 +141,34 @@ export function consoleTunnelData(): string {
 export function openJobSocket(jobId: string, handlers: JobSocketHandlers): () => void {
   const ws = new WebSocket(wsUrl(URLS.ws.jobs(jobId), useAuthStore.getState().token))
   let settled = false
+  let watchdog: ReturnType<typeof setTimeout> | undefined
+
+  // A transport failure (`status: 0`) with the abnormal close code, so the
+  // caller's retry ladder reconnects — and the reconnect replays the snapshot,
+  // which is what delivers the terminal frame this socket stopped carrying.
+  const onSilence = () => {
+    if (settled) return
+    settled = true
+    ws.onmessage = null
+    ws.onclose = null
+    ws.close()
+    handlers.onError?.({
+      type: "error",
+      status: 0,
+      detail: "Progress connection went silent — reconnecting.",
+      code: 1006,
+    })
+  }
+
+  const armWatchdog = () => {
+    clearTimeout(watchdog)
+    if (!settled) watchdog = setTimeout(onSilence, JOB_SOCKET_SILENCE_MS)
+  }
+
+  armWatchdog()
 
   ws.onmessage = (ev) => {
+    armWatchdog()
     let msg: JobMessage
     try {
       msg = JSON.parse(ev.data) as JobMessage
@@ -134,6 +176,8 @@ export function openJobSocket(jobId: string, handlers: JobSocketHandlers): () =>
       return
     }
     switch (msg.type) {
+      case "ping":
+        break
       case "queued":
         handlers.onQueued?.(msg)
         break
@@ -148,10 +192,12 @@ export function openJobSocket(jobId: string, handlers: JobSocketHandlers): () =>
         break
       case "done":
         settled = true
+        clearTimeout(watchdog)
         handlers.onDone?.(msg)
         break
       case "error":
         settled = true
+        clearTimeout(watchdog)
         handlers.onError?.(msg)
         break
     }
@@ -160,6 +206,7 @@ export function openJobSocket(jobId: string, handlers: JobSocketHandlers): () =>
   // A socket that closes without a terminal frame is a failure the caller has
   // to react to — and the code is how it tells "expired" from "dropped".
   ws.onclose = (ev) => {
+    clearTimeout(watchdog)
     if (settled) return
     settled = true
     handlers.onError?.({
@@ -171,6 +218,7 @@ export function openJobSocket(jobId: string, handlers: JobSocketHandlers): () =>
   }
 
   return () => {
+    clearTimeout(watchdog)
     ws.onmessage = null
     ws.onclose = null
     ws.close()
