@@ -47,6 +47,23 @@ from app.core.settings import settings
 
 router = APIRouter(prefix="/ws", tags=["ws"])
 
+#: Idle heartbeat for the job socket. Deliberately *not* a member of
+#: ``jobs.models.Message``: nothing publishes it onto a job's channel and it is
+#: never stored as the Valkey snapshot's ``last`` — it exists only between this
+#: socket and the browser, and the client discards it.
+#:
+#: A deploy plan is silent for minutes at a stretch (``dc.install_forest`` and
+#: ``ca.install`` each run 10+ minutes emitting nothing), and this stream only
+#: ever spoke when the transport published. That silence is reaped by anything
+#: in the path — nginx's ``proxy_read_timeout`` is 60s, Cloudflare's WebSocket
+#: idle timeout ~100s — and the drop does not always reach the browser as a
+#: close event. A client holding a half-open socket has no reason to reconnect,
+#: so the terminal ``DoneMsg`` is published into a connection nobody is reading
+#: and the canvas stays locked on a deploy that finished: one run's socket was
+#: accepted at 11:44:42, went quiet mid-plan, and was not replaced until the
+#: user reloaded 8h31m later, hours after the plan had succeeded at 13:10:52.
+_HEARTBEAT = {"type": "ping"}
+
 
 async def reject(websocket: WebSocket, code: int) -> None:
     """Close with *code* after accepting, so the client actually receives *code*.
@@ -123,8 +140,13 @@ async def job_progress(
             if last["type"] in TERMINAL_TYPES:
                 return
 
-        async for raw in pubsub.listen():
-            if raw["type"] != "message":
+        while True:
+            raw = await pubsub.get_message(
+                ignore_subscribe_messages=True,
+                timeout=settings.job_keepalive_s,
+            )
+            if raw is None:
+                await send_json_or_disconnect(websocket, _HEARTBEAT)
                 continue
             msg = json.loads(raw["data"])
             await send_json_or_disconnect(websocket, msg)

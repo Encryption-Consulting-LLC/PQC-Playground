@@ -203,6 +203,14 @@ class Settings(BaseSettings):
     # to 60s), which reads to the user as a session that died on its own.
     console_keepalive_s: int = 20
 
+    # The same idle keepalive for the job-progress socket, and for the same
+    # reason — a deploy plan goes quiet for whole role installs, so without it
+    # the stream is indistinguishable from a dead one until it *is* one. Kept
+    # well under nginx's 60s so the browser sees several heartbeats per timeout
+    # window; the client treats a longer silence than that as a dead socket and
+    # reconnects (frontend `JOB_SOCKET_SILENCE_MS`).
+    job_keepalive_s: int = 20
+
     # LEGACY-IMAGE RECOVERY ONLY: uptime (seconds) past which a still-registered
     # FirstBootFinalize scheduled task is treated as having missed its
     # -AtStartup trigger; the worker then dispatches system.reboot. Current

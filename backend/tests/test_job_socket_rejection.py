@@ -8,6 +8,8 @@ silent transport failure. Every rejection here must therefore arrive as a real
 close frame carrying its code, not as a denied handshake.
 """
 
+import json
+
 import pytest
 from fastapi import FastAPI
 from starlette.testclient import TestClient, WebSocketDenialResponse
@@ -18,20 +20,32 @@ from app.routers import ws
 
 
 class _FakePubSub:
+    """Replays a scripted sequence of ``get_message`` replies.
+
+    A ``None`` entry is the idle timeout — what the real client returns when the
+    channel said nothing for ``timeout`` seconds, and what makes the route
+    heartbeat.
+    """
+
+    def __init__(self, script=()) -> None:
+        self._script = list(script)
+
     async def subscribe(self, *_channels) -> None: ...
 
     async def unsubscribe(self, *_channels) -> None: ...
 
     async def aclose(self) -> None: ...
 
-    async def listen(self):  # pragma: no cover — terminal paths return first
-        return
-        yield
+    async def get_message(self, ignore_subscribe_messages=False, timeout=None):
+        return self._script.pop(0) if self._script else None
 
 
 class _FakeRedis:
+    def __init__(self, script=()) -> None:
+        self._script = script
+
     def pubsub(self) -> _FakePubSub:
-        return _FakePubSub()
+        return _FakePubSub(self._script)
 
     async def aclose(self) -> None: ...
 
@@ -42,6 +56,11 @@ def client(monkeypatch) -> TestClient:
     app = FastAPI()
     app.include_router(ws.router)
     return TestClient(app)
+
+
+def _published(message: dict) -> dict:
+    """One pubsub delivery carrying *message*."""
+    return {"type": "message", "data": json.dumps(message)}
 
 
 def _as(username: str, role: Role):
@@ -163,3 +182,42 @@ def test_an_operator_may_replay_any_deployment(client, monkeypatch) -> None:
 
     with client.websocket_connect("/ws/jobs/job9?token=t") as socket:
         assert socket.receive_json()["type"] == "done"
+
+
+def _streaming_client(monkeypatch, script) -> TestClient:
+    """A client whose job channel replays *script*, reaching the streaming loop."""
+    monkeypatch.setattr(ws.transport, "make_async_client", lambda: _FakeRedis(script))
+    monkeypatch.setattr(ws, "resolve_user_token", _as("guest", Role.GUEST))
+    monkeypatch.setattr(ws.transport, "read_snapshot", _snapshot({"last": None}))
+    app = FastAPI()
+    app.include_router(ws.router)
+    return TestClient(app)
+
+
+def test_a_quiet_channel_still_sends_heartbeats(monkeypatch) -> None:
+    """The regression: a deploy plan is silent for whole role installs.
+
+    This stream only ever spoke when the transport published, so a proxy reaped
+    it as idle and the browser — which reacts to nothing but `close` — kept a
+    half-open socket. The terminal frame went into a connection nobody was
+    reading and the canvas stayed locked on a deploy that had finished.
+    """
+    done = {"type": "done", "result": {}}
+    client = _streaming_client(monkeypatch, [None, None, _published(done)])
+
+    with client.websocket_connect("/ws/jobs/job9?token=t") as socket:
+        assert socket.receive_json() == {"type": "ping"}
+        assert socket.receive_json() == {"type": "ping"}
+        assert socket.receive_json() == done
+
+
+def test_heartbeats_do_not_displace_published_messages(monkeypatch) -> None:
+    """A heartbeat is filler between real frames, never instead of one."""
+    state = {"type": "plan-state", "ops": {"clone-dc": {"status": "running"}}}
+    done = {"type": "done", "result": {"ops": {}}}
+    client = _streaming_client(monkeypatch, [_published(state), None, _published(done)])
+
+    with client.websocket_connect("/ws/jobs/job9?token=t") as socket:
+        assert socket.receive_json() == state
+        assert socket.receive_json() == {"type": "ping"}
+        assert socket.receive_json() == done
