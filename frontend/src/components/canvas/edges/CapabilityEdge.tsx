@@ -62,7 +62,24 @@ export function CapabilityEdge(props: EdgeProps) {
         !!item.health,
     )
   const liveProbe = liveServices.length > 0
-  const serviceColor = (state: ConnectionHealth) => {
+  // The stroke carries the *relationship* — amber CA issuance, emerald CDP/AIA
+  // publication, violet OCSP — and health is layered onto that, never swapped
+  // for it. Repainting a live-probed edge with one "verified" emerald erased
+  // the coding at exactly the moment the graph was fully working: every line in
+  // a healthy lab came out the same green, so the picture stopped saying which
+  // relationship was which. `verified` therefore renders as the edge's own
+  // colour, lit up by `healthyGlow`, and only the states that want attention
+  // take the stroke over.
+  const baseColor =
+    edgeType === EDGE_TYPE.caHierarchy
+      ? "#f59e0b"
+      : edgeServiceSocket(props) === SERVICE_SOCKET.ocsp
+        ? "#8b5cf6"
+        : typeof props.style?.stroke === "string"
+          ? props.style.stroke
+          : "#10b981"
+  /** Status palette, for the places that name the state in words beside it. */
+  const healthColor = (state: ConnectionHealth) => {
     switch (state) {
       case CONNECTION_HEALTH.planned:
         return "#38bdf8"
@@ -76,40 +93,50 @@ export function CapabilityEdge(props: EdgeProps) {
         return "#ef4444"
     }
   }
+  /** Stroke palette: a verified service defers to the edge's own colour. */
+  const strokeColor = (state: ConnectionHealth) =>
+    state === CONNECTION_HEALTH.verified ? baseColor : healthColor(state)
+  // Because verified no longer changes hue, the evidence that the probes came
+  // back clean has to read some other way: the live-probe branch below already
+  // thickens the line, and this gives it a faint halo in its own colour.
+  const healthyGlow: CSSProperties =
+    liveProbe &&
+    liveServices.every((item) => item.health === CONNECTION_HEALTH.verified)
+      ? { filter: `drop-shadow(0 0 3px ${baseColor})` }
+      : {}
   const pathStyle: CSSProperties = {
     ...props.style,
     ...(health === CONNECTION_HEALTH.applying
       ? { strokeDasharray: "7 4", opacity: 1 }
       : health === CONNECTION_HEALTH.degraded
-        ? { stroke: "#f59e0b", strokeDasharray: "4 4", opacity: 1 }
+        ? {
+            stroke: healthColor(CONNECTION_HEALTH.degraded),
+            strokeDasharray: "4 4",
+            opacity: 1,
+          }
         : health === CONNECTION_HEALTH.broken
-          ? { stroke: "#ef4444", strokeWidth: 2.5, opacity: 1 }
+          ? {
+              stroke: healthColor(CONNECTION_HEALTH.broken),
+              strokeWidth: 2.5,
+              opacity: 1,
+            }
           : {}),
     ...(liveProbe
       ? { stroke: `url(#${gradientId})`, strokeWidth: 3, opacity: 1 }
       : {}),
+    ...healthyGlow,
     ...(edgeType === EDGE_TYPE.webServerCert && props.data?.rootIssuer === true
       ? { strokeDasharray: "1 6", strokeLinecap: "round" }
       : {}),
   }
-  const baseColor =
-    edgeType === EDGE_TYPE.caHierarchy
-      ? "#f59e0b"
-      : edgeServiceSocket(props) === SERVICE_SOCKET.ocsp
-        ? "#8b5cf6"
-        : typeof props.style?.stroke === "string"
-          ? props.style.stroke
-          : "#10b981"
   const arrowColor =
     liveServices.length > 0
-      ? serviceColor(liveServices[liveServices.length - 1].health)
-      : health === CONNECTION_HEALTH.broken
-        ? "#ef4444"
-        : health === CONNECTION_HEALTH.degraded
-          ? "#f59e0b"
-          : health === CONNECTION_HEALTH.applying
-            ? "#8b5cf6"
-            : baseColor
+      ? strokeColor(liveServices[liveServices.length - 1].health)
+      : health === CONNECTION_HEALTH.broken ||
+          health === CONNECTION_HEALTH.degraded ||
+          health === CONNECTION_HEALTH.applying
+        ? healthColor(health)
+        : baseColor
 
   return (
     <>
@@ -137,7 +164,7 @@ export function CapabilityEdge(props: EdgeProps) {
             {liveServices.flatMap((service, index) => {
               const start = `${(index / liveServices.length) * 100}%`
               const end = `${((index + 1) / liveServices.length) * 100}%`
-              const color = serviceColor(service.health)
+              const color = strokeColor(service.health)
               return [
                 <stop
                   key={`${service.port}-start`}
@@ -264,7 +291,7 @@ export function CapabilityEdge(props: EdgeProps) {
                         >
                           <span
                             className="mt-1 h-2 w-2 shrink-0 rounded-full"
-                            style={{ backgroundColor: serviceColor(state) }}
+                            style={{ backgroundColor: healthColor(state) }}
                           />
                           <span className="min-w-0">
                             <span className="font-medium">{item.label}</span>{" "}
