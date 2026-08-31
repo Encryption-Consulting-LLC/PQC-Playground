@@ -169,6 +169,28 @@ export function nodeRealizationOps(
 }
 
 /**
+ * True while a plan op touching `nodeId` is queued with the runner or running —
+ * this machine is being changed right now.
+ *
+ * Deliberately per-node rather than the store's global `deploying`: a plan is
+ * one lock but many machines, and a guest whose own steps finished twenty
+ * minutes ago is not busy because a CA elsewhere in the DAG still is. That is
+ * what the remote-desktop button reads, so a lab can be walked into as it
+ * finishes instead of only after the whole plan lands.
+ *
+ * `staged` is not in flight — nothing has been sent, so the guest is untouched
+ * — and neither is any terminal status: a step that has finished, however it
+ * finished, will not reach into this VM again.
+ */
+export function nodeOpsInFlight(ops: StagedOp[], nodeId: string): boolean {
+  return ops.some(
+    (op) =>
+      (op.targetNodeId === nodeId || op.secondaryNodeId === nodeId) &&
+      (op.status === OP_STATUS.pending || op.status === OP_STATUS.running),
+  )
+}
+
+/**
  * The ops a Deploy would actually send. `done` rows retained after a failed
  * run are history — they stay listed for context, but they are never counted,
  * re-sent, or undone.

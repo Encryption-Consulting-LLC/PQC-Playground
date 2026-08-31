@@ -17,6 +17,7 @@ import { Loader2, Monitor } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import { templatePlatform } from "@/constants"
+import { nodeOpsInFlight } from "@/lib/staging"
 import { useConsoleStore } from "@/store/console"
 import { useStagingStore } from "@/store/staging"
 import { useTopologyStore } from "@/store/topology"
@@ -25,7 +26,12 @@ export function RemoteDesktopPanel({ nodeId }: { nodeId: string }) {
   const data = useTopologyStore(
     (s) => s.nodes.find((n) => n.id === nodeId)?.data,
   )
-  const deploying = useStagingStore((s) => s.deploying)
+  // Per-node, not the plan-wide `deploying` flag. A deploy holds one lock
+  // over a DAG of many machines, and this node's own steps are usually done
+  // long before the plan is: gating on the global flag meant a lab that had
+  // finished standing up a DC could not be opened until the last CA in the
+  // plan had also finished, which is exactly when someone wants to look at it.
+  const opsInFlight = useStagingStore((s) => nodeOpsInFlight(s.ops, nodeId))
   const start = useConsoleStore((s) => s.start)
   const authorizing = useConsoleStore(
     (s) => s.session?.nodeId === nodeId && s.session.status === "authorizing",
@@ -50,7 +56,7 @@ export function RemoteDesktopPanel({ nodeId }: { nodeId: string }) {
         variant="outline"
         size="sm"
         className="w-full justify-start gap-2"
-        disabled={authorizing || deploying}
+        disabled={authorizing || opsInFlight}
         onClick={() => start({ nodeId, vmName, label })}
       >
         {authorizing ? (
@@ -61,8 +67,9 @@ export function RemoteDesktopPanel({ nodeId }: { nodeId: string }) {
         {authorizing ? "Connecting…" : "Connect"}
       </Button>
       <p className="text-[11px] leading-snug text-muted-foreground">
-        Opens the guest desktop in this tab. Signed in for you — no password
-        needed.
+        {opsInFlight
+          ? "A deployment step is still running on this machine — the desktop opens once it finishes."
+          : "Opens the guest desktop in this tab. Signed in for you — no password needed."}
       </p>
     </section>
   )

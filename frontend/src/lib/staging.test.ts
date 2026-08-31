@@ -477,6 +477,29 @@ test("nodeAwaitingRealization gates agent-presence promotion", () => {
   ).toBe(false)
 })
 
+test("nodeOpsInFlight is per-node, so a finished machine is reachable mid-plan", () => {
+  issuingCaScenario()
+  const ops = staging.useStagingStore
+    .getState()
+    .ops.map((op) =>
+      op.id === "op-web"
+        ? { ...op, status: lib.OP_STATUS.running }
+        : { ...op, status: lib.OP_STATUS.done },
+    )
+
+  // The whole plan is still `deploying`, but the CA's own steps have landed —
+  // its desktop must be openable while the web host is still being stood up.
+  expect(lib.nodeOpsInFlight(ops, "node-web")).toBe(true)
+  expect(lib.nodeOpsInFlight(ops, "node-ca2")).toBe(false)
+
+  // Staging more work for a deployed node touches nothing yet, so it does not
+  // take the desktop away; a terminal failure does not either.
+  const staged = ops.map((op) => ({ ...op, status: lib.OP_STATUS.staged }))
+  expect(lib.nodeOpsInFlight(staged, "node-web")).toBe(false)
+  const failed = ops.map((op) => ({ ...op, status: lib.OP_STATUS.error }))
+  expect(lib.nodeOpsInFlight(failed, "node-web")).toBe(false)
+})
+
 test("finishDeploy drops synthetic rows alongside their successful parents", () => {
   staging.applyPlanState({ "op-dc::provision": { status: "pending" } }, "job1")
 
