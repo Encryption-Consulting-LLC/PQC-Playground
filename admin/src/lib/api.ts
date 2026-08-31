@@ -153,12 +153,29 @@ export const getHealth = () => request<Health>(URLS.health)
 
 // --- /admin/users --------------------------------------------------------
 
+/**
+ * The product catalogue an account can be granted, mirroring the backend's
+ * ``PRODUCT_ROLES`` (core/infrastructure.py) — the same documented-mirror
+ * convention the PkiRole union below already follows.
+ */
+export const PRODUCT_TEMPLATES = [
+  { id: "certsecure", label: "CertSecure Manager" },
+  { id: "cbom", label: "CBOM Secure" },
+  { id: "codesign", label: "CodeSign Secure" },
+] as const
+
 export interface AdminUser {
   username: string
   email: string | null
   role: "admin" | "operator" | "guest"
   auth: "local" | "oidc"
   disabled: boolean
+  /**
+   * Products this account may deploy. Stored for every role but read only for
+   * guests — an operator holds the whole catalogue regardless, so the column
+   * shows "All" for them rather than an empty grant that would read as none.
+   */
+  products: string[]
   createdAt: number | null
   updatedAt: number | null
 }
@@ -171,6 +188,7 @@ export interface UserCreateRequest {
   password: string
   role: "admin" | "operator" | "guest"
   email?: string | null
+  products?: string[]
 }
 
 export const createUser = (body: UserCreateRequest) =>
@@ -183,6 +201,8 @@ export interface UserPatchRequest {
   disabled?: boolean
   password?: string
   role?: "admin" | "operator" | "guest"
+  /** The whole grant, not a delta — `[]` revokes every product. */
+  products?: string[]
 }
 
 export const patchUser = (username: string, body: UserPatchRequest) =>

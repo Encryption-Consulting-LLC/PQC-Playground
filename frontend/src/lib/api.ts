@@ -146,6 +146,14 @@ export interface Me {
   role: string
   auth: "local" | "oidc" | "guest"
   capabilities: Capability[]
+  /**
+   * Product template ids this *account* may deploy — the resolved set, so an
+   * operator holds the whole catalogue and the palette needs no role branch.
+   * Capabilities are per-role and answer *whether*; this is per-account and
+   * answers *which*, which is why it rides here rather than becoming one
+   * capability per product.
+   */
+  products: string[]
 }
 
 /** The signed-in identity + capability allowlist (what `useCan` reads). */

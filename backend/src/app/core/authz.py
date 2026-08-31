@@ -34,6 +34,7 @@ from fastapi import Depends, Header, HTTPException
 from pydantic import BaseModel
 
 from app.core.identity import AuthProvenance, decode_token
+from app.core.infrastructure import LINUX_PRODUCT_TEMPLATES
 from app.core.vm_naming import (
     GUEST_MACHINE_MAX,
     guest_namespace,
@@ -206,6 +207,29 @@ class AuthedUser(BaseModel):
     username: str
     role: Role
     auth: AuthProvenance
+    #: Product templates this *account* may deploy, as stored on its user
+    #: document. Read only for guests — see ``allowed_product_templates``.
+    products: list[str] = []
+
+
+def allowed_product_templates(user: AuthedUser) -> frozenset[str]:
+    """Which product templates this account may put on the canvas.
+
+    The one place in the model that is per-account rather than per-role, and
+    deliberately so: the products are what a visitor is usually here to be shown,
+    and which ones differs per cohort — an account evaluating CertSecure has no
+    business standing up CodeSign Secure beside it. A role could not express
+    that without a role per product.
+
+    Guests are **deny by default**: an account with nothing recorded gets
+    nothing, so a newly provisioned guest is limited until an admin says
+    otherwise rather than the reverse. Operators and admins are unrestricted —
+    the PKI components (DC, CA, web server) are unrestricted for everyone, and
+    this list never touches them.
+    """
+    if user.role is not Role.GUEST:
+        return LINUX_PRODUCT_TEMPLATES
+    return frozenset(user.products) & LINUX_PRODUCT_TEMPLATES
 
 
 def capabilities_for(role: Role) -> list[str]:
@@ -238,7 +262,10 @@ async def resolve_user_token(token: str | None) -> AuthedUser | None:
     if doc is None or doc.get("disabled"):
         return None
     return AuthedUser(
-        username=doc["username"], role=Role(doc["role"]), auth=payload["auth"]
+        username=doc["username"],
+        role=Role(doc["role"]),
+        auth=payload["auth"],
+        products=list(doc.get("products") or []),
     )
 
 

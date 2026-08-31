@@ -4,6 +4,7 @@ import { TEMPLATE_CATALOG } from "@/constants/templates"
 import { actionableOps } from "@/lib/staging"
 import { cn } from "@/lib/utils"
 import { useStagingStore } from "@/store/staging"
+import { useIsTemplateAvailable } from "@/hooks/useAllowedProducts"
 import { useIsJoinedLab } from "@/hooks/useJoinedLab"
 import { StagedPanel } from "./StagedPanel"
 
@@ -29,6 +30,12 @@ export function Toolbox() {
   // — the templates are what the lab is made of, and reading them is useful.
   const joinedLab = useIsJoinedLab()
   const locked = deploying || joinedLab
+  // Per-account, unlike `locked`: which products an account may deploy is a
+  // property of the account, not of what the canvas is doing. An unavailable
+  // one stays listed — the catalogue is worth reading either way, and a card
+  // that silently disappears reads as a missing feature rather than as one
+  // this account was not given.
+  const isAvailable = useIsTemplateAvailable()
 
   return (
     <aside
@@ -102,20 +109,35 @@ export function Toolbox() {
           <div className="grid grid-cols-2 gap-2">
             {PRODUCT_TEMPLATES.map((product) => {
               const Icon = product.icon
+              const available = isAvailable(product.id)
+              const draggable = !locked && available
               return (
                 <div
                   key={product.id}
-                  draggable={!locked}
+                  draggable={draggable}
                   onDragStart={(e) => {
+                    // `draggable={false}` already stops the gesture; refusing
+                    // to write the payload too means a drag started some other
+                    // way carries nothing the canvas would accept.
+                    if (!draggable) {
+                      e.preventDefault()
+                      return
+                    }
                     e.dataTransfer.setData(DRAG_TYPE, product.id)
                     e.dataTransfer.effectAllowed = "copy"
                   }}
-                  title={`${product.description} · clones ${product.cloneBase}`}
+                  title={
+                    available
+                      ? `${product.description} · clones ${product.cloneBase}`
+                      : `${product.label} is not available to your account.`
+                  }
                   className={cn(
                     "flex flex-col items-center justify-center gap-2 rounded-lg border bg-card px-2 py-3 shadow-sm select-none transition-colors",
-                    locked
-                      ? "cursor-not-allowed opacity-50"
-                      : "cursor-grab hover:bg-accent hover:text-accent-foreground active:cursor-grabbing",
+                    !available
+                      ? "cursor-not-allowed opacity-40 grayscale"
+                      : locked
+                        ? "cursor-not-allowed opacity-50"
+                        : "cursor-grab hover:bg-accent hover:text-accent-foreground active:cursor-grabbing",
                   )}
                 >
                   {product.logo ? (

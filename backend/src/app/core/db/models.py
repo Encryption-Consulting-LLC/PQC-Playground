@@ -226,6 +226,11 @@ class UserDoc(MongoModel):
     role: Literal["admin", "operator", "guest"] = "operator"
     auth: Literal["local", "oidc"] = "local"
     disabled: bool = False
+    #: Product template ids this account may deploy — the per-account half of
+    #: the model (``authz.allowed_product_templates``). Read for guests only,
+    #: and empty means none: a guest is limited until an admin widens it. An
+    #: operator's list is ignored, so it stays empty on those documents.
+    products: list[str] = Field(default_factory=list)
     schema_version: int = Field(default=1, alias="schemaVersion")
     created_at: int = Field(alias="createdAt")
     updated_at: int = Field(alias="updatedAt")

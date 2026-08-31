@@ -1,6 +1,6 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { KeyRound, Loader2, Plus, ShieldAlert } from "lucide-react"
+import { Boxes, KeyRound, Loader2, Plus, ShieldAlert } from "lucide-react"
 import { toast } from "sonner"
 
 import { QUERY_KEYS } from "@/constants"
@@ -8,6 +8,7 @@ import {
   createUser,
   listUsers,
   patchUser,
+  PRODUCT_TEMPLATES,
   type AdminUser,
   type UserCreateRequest,
 } from "@/lib/api"
@@ -16,6 +17,7 @@ import { useMe } from "@/hooks/useMe"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
+import { Checkbox } from "@/components/ui/checkbox"
 import {
   Dialog,
   DialogBody,
@@ -62,6 +64,7 @@ export function UsersSection() {
   const [createOpen, setCreateOpen] = useState(false)
   const [disableTarget, setDisableTarget] = useState<AdminUser | null>(null)
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null)
+  const [productsTarget, setProductsTarget] = useState<AdminUser | null>(null)
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.users })
 
@@ -132,6 +135,7 @@ export function UsersSection() {
                 <TableRow>
                   <TableHead>Username</TableHead>
                   <TableHead>Role</TableHead>
+                  <TableHead>Products</TableHead>
                   <TableHead>Auth</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Created</TableHead>
@@ -165,6 +169,9 @@ export function UsersSection() {
                       </Select>
                     </TableCell>
                     <TableCell>
+                      <ProductSummary user={user} />
+                    </TableCell>
+                    <TableCell>
                       <Badge variant="outline">{user.auth}</Badge>
                     </TableCell>
                     <TableCell>
@@ -180,6 +187,15 @@ export function UsersSection() {
                     </TableCell>
                     <TableCell className="text-right">
                       <div className="flex items-center justify-end gap-(--gap-row)">
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          title="Product access"
+                          aria-label="Product access"
+                          onClick={() => setProductsTarget(user)}
+                        >
+                          <Boxes className="size-4" />
+                        </Button>
                         {user.auth !== "oidc" && (
                           <Button
                             variant="ghost"
@@ -224,6 +240,25 @@ export function UsersSection() {
         }}
       />
 
+      <ProductAccessDialog
+        key={productsTarget?.username ?? "none"}
+        user={productsTarget}
+        onCancel={() => setProductsTarget(null)}
+        onSubmit={(products) => {
+          if (!productsTarget) return
+          patchMutation.mutate(
+            { username: productsTarget.username, body: { products } },
+            {
+              onSuccess: () => {
+                setProductsTarget(null)
+                toast.success("Product access updated.")
+              },
+            },
+          )
+        }}
+        pending={patchMutation.isPending}
+      />
+
       <ResetPasswordDialog
         user={resetTarget}
         onCancel={() => setResetTarget(null)}
@@ -237,6 +272,100 @@ export function UsersSection() {
         pending={patchMutation.isPending}
       />
     </div>
+  )
+}
+
+/**
+ * What the account may deploy off the product catalogue.
+ *
+ * Operators and admins read as "All" rather than as their stored (empty) list:
+ * the grant is only consulted for guests, so showing an operator's empty array
+ * as "None" would describe a restriction that does not exist.
+ */
+function ProductSummary({ user }: { user: AdminUser }) {
+  if (user.role !== "guest") {
+    return <span className="text-xs text-muted-foreground">All</span>
+  }
+  if (user.products.length === 0) {
+    return <span className="text-xs text-muted-foreground">None</span>
+  }
+  return (
+    <div className="flex flex-wrap gap-(--gap-inline)">
+      {user.products.map((id) => (
+        <Badge key={id} variant="outline">
+          {PRODUCT_TEMPLATES.find((product) => product.id === id)?.label ?? id}
+        </Badge>
+      ))}
+    </div>
+  )
+}
+
+/**
+ * Per-account product grant — the one part of the model that is not per-role.
+ * Submits the whole set, so clearing every box revokes the catalogue; it takes
+ * effect on the account's next request, like disabling and role changes.
+ *
+ * The caller keys this on the username so the checkboxes are seeded from
+ * whichever account was opened rather than kept from the last one.
+ */
+function ProductAccessDialog({
+  user,
+  onCancel,
+  onSubmit,
+  pending,
+}: {
+  user: AdminUser | null
+  onCancel: () => void
+  onSubmit: (products: string[]) => void
+  pending: boolean
+}) {
+  const [selected, setSelected] = useState<string[]>(() => user?.products ?? [])
+
+  return (
+    <Dialog open={user !== null} onOpenChange={(next) => !next && onCancel()}>
+      <DialogPortal>
+        <DialogBackdrop />
+        <DialogPopup>
+          <DialogTitle>Product access for {user?.username}</DialogTitle>
+          <DialogDescription>
+            {user?.role === "guest"
+              ? "Unselected products are greyed out in that account's palette and refused by the deploy route."
+              : "Only guest accounts are restricted — an operator or admin holds the whole catalogue regardless of what is selected here."}
+          </DialogDescription>
+          <DialogBody>
+            <div className="grid gap-(--gap-row)">
+              {PRODUCT_TEMPLATES.map((product) => (
+                <Label
+                  key={product.id}
+                  className="flex items-center gap-(--gap-inline) text-xs font-normal"
+                >
+                  <Checkbox
+                    checked={selected.includes(product.id)}
+                    onCheckedChange={(checked) =>
+                      setSelected((prev) =>
+                        checked
+                          ? [...prev, product.id]
+                          : prev.filter((id) => id !== product.id),
+                      )
+                    }
+                  />
+                  {product.label}
+                </Label>
+              ))}
+            </div>
+          </DialogBody>
+          <DialogFooter>
+            <Button variant="ghost" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button size="sm" disabled={pending} onClick={() => onSubmit(selected)}>
+              {pending ? <Loader2 className="size-4 animate-spin" /> : <Boxes className="size-4" />}
+              Save access
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </DialogPortal>
+    </Dialog>
   )
 }
 
@@ -255,12 +384,17 @@ function CreateUserDialog({
   const [password, setPassword] = useState("")
   const [role, setRole] = useState<"admin" | "operator" | "guest">("guest")
   const [email, setEmail] = useState("")
+  // Deny by default, deliberately: a guest provisioned in a hurry gets the PKI
+  // components and nothing off the catalogue, rather than everything until
+  // somebody remembers to take it back.
+  const [products, setProducts] = useState<string[]>([])
 
   function reset() {
     setUsername("")
     setPassword("")
     setRole("guest")
     setEmail("")
+    setProducts([])
   }
 
   return (
@@ -311,6 +445,29 @@ function CreateUserDialog({
                 </SelectContent>
               </Select>
             </div>
+            {role === "guest" && (
+              <div className="grid gap-(--gap-inline)">
+                <Label>Product access</Label>
+                {PRODUCT_TEMPLATES.map((product) => (
+                  <Label
+                    key={product.id}
+                    className="flex items-center gap-(--gap-inline) text-xs font-normal"
+                  >
+                    <Checkbox
+                      checked={products.includes(product.id)}
+                      onCheckedChange={(checked) =>
+                        setProducts((prev) =>
+                          checked
+                            ? [...prev, product.id]
+                            : prev.filter((id) => id !== product.id),
+                        )
+                      }
+                    />
+                    {product.label}
+                  </Label>
+                ))}
+              </div>
+            )}
           </DialogBody>
           <DialogFooter>
             <Button variant="ghost" size="sm" onClick={() => onOpenChange(false)}>
@@ -320,7 +477,13 @@ function CreateUserDialog({
               size="sm"
               disabled={pending || username.trim().length === 0 || password.length < 8}
               onClick={() =>
-                onSubmit({ username: username.trim(), password, role, email: email.trim() || null })
+                onSubmit({
+                  username: username.trim(),
+                  password,
+                  role,
+                  email: email.trim() || null,
+                  products,
+                })
               }
             >
               {pending ? <Loader2 className="size-4 animate-spin" /> : <Plus className="size-4" />}

@@ -31,7 +31,13 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from app.core import oidc
-from app.core.authz import AuthedUser, Role, capabilities_for, get_current_user
+from app.core.authz import (
+    AuthedUser,
+    Role,
+    allowed_product_templates,
+    capabilities_for,
+    get_current_user,
+)
 from app.core.db import now_ms, to_mongo, users_col
 from app.core.db.models import UserDoc
 from app.core.esxi import load_target
@@ -101,12 +107,21 @@ def logout() -> dict:
 
 @router.get("/me")
 async def me(user: AuthedUser = Depends(get_current_user)) -> dict:
-    """The authenticated identity and its capability allowlist (what ``useCan`` reads)."""
+    """The authenticated identity and its capability allowlist (what ``useCan`` reads).
+
+    ``products`` rides alongside because it answers a question capabilities
+    cannot: capabilities are per-role and say *whether*, while the product
+    catalogue is per-account and says *which*. It is the resolved set (an
+    operator gets every product), so the palette needs no role branch — an id
+    absent from this list is greyed out and undraggable, and the deploy route
+    refuses it regardless of what the palette allowed.
+    """
     return {
         "username": user.username,
         "role": user.role.value,
         "auth": user.auth,
         "capabilities": capabilities_for(user.role),
+        "products": sorted(allowed_product_templates(user)),
     }
 
 

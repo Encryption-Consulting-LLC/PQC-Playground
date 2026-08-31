@@ -34,6 +34,7 @@ from app.core.authz import (
     AuthedUser,
     Capability,
     Role,
+    allowed_product_templates,
     enforce_guest_vm_name,
     get_current_user,
     require_capability,
@@ -204,7 +205,9 @@ def validate_plan(
     """Raise 422 on a malformed plan: duplicate ids, unknown/self deps, cycles,
     a ``createVm`` missing its ``vmName``/``template`` params, or invalid
     authored-ISO content — and 403 when a role without ``ISO_AUTHOR`` submits
-    authored content at all.
+    authored content at all, or when a ``createVm`` names a product template the
+    calling *account* is not entitled to (``allowed_product_templates`` — the
+    per-account catalogue; the PKI component templates are unrestricted).
 
     Every ``createVm`` is a real clone (any client ``simulate`` param is
     ignored — real-vs-stub is never client authority), so each one needs a
@@ -222,6 +225,7 @@ def validate_plan(
     stay easy to read and the errors are unambiguous 422s.
     """
     clone_base = clone_base or settings.clone_base
+    allowed_products = allowed_product_templates(user)
     template_clone_bases = {
         template: LINUX_PRODUCT_BASE for template in LINUX_PRODUCT_TEMPLATES
     }
@@ -310,6 +314,19 @@ def validate_plan(
             raise HTTPException(
                 422,
                 detail=f"Op '{op.id}' (createVm) has a missing or unknown 'template' param.",
+            )
+        # The per-account product catalogue. 403 rather than 422: the template
+        # is perfectly valid, this account is simply not entitled to it, and the
+        # palette already greys it out — reaching here means the client was
+        # bypassed, which is exactly the case the allowlist exists for.
+        template = op.params["template"]
+        if template in LINUX_PRODUCT_TEMPLATES and template not in allowed_products:
+            raise HTTPException(
+                403,
+                detail=(
+                    f"Op '{op.id}' (createVm): '{template}' is not available to "
+                    f"account '{user.username}'."
+                ),
             )
         # Per-template config (CA algorithm/key length, …) rides flat in params;
         # this is the authoritative validator + the unknown-key injection gate.

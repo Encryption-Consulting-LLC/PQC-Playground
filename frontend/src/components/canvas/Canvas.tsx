@@ -29,8 +29,10 @@ import {
   type DomainSyncChange,
 } from "@/store/topology"
 import { opsReferencingNode, useStagingStore } from "@/store/staging"
+import { useIsTemplateAvailable } from "@/hooks/useAllowedProducts"
 import { useIsJoinedLab } from "@/hooks/useJoinedLab"
 import { OP_KIND, actionableOps, type StagedOp } from "@/lib/staging"
+import { TEMPLATE_BY_ID } from "@/constants/templates"
 import { DRAFT_NODE_SIZE, EDGE_TYPE } from "@/constants/topology"
 import {
   domainJoinBlockReason,
@@ -85,6 +87,7 @@ export function Canvas() {
   // gesture that is impossible mid-deploy is impossible here too.
   const joinedLab = useIsJoinedLab()
   const readOnly = deploying || joinedLab
+  const isAvailable = useIsTemplateAvailable()
   // Select individual action refs (stable across renders) rather than the
   // whole store, so the callbacks below aren't recreated on every state
   // change — recreating onSelectionChange feeds a React Flow update loop.
@@ -686,6 +689,15 @@ export function Canvas() {
       if (readOnly || evidenceActive) return
       const typeId = e.dataTransfer.getData(DRAG_TYPE)
       if (!typeId) return
+      // Second half of the palette's greying-out — a drag that got started
+      // some other way must not place a node this account cannot deploy, or
+      // the refusal arrives much later as a 403 on a plan it is part of.
+      if (!isAvailable(typeId)) {
+        toast.error(
+          `${TEMPLATE_BY_ID[typeId]?.label ?? typeId} is not available to your account.`,
+        )
+        return
+      }
 
       // React Flow positions a node by its top-left corner, so handing it the
       // pointer verbatim drops the card down-right of the cursor and the user
@@ -723,7 +735,15 @@ export function Canvas() {
       }
       addNode(typeId, position)
     },
-    [screenToFlowPosition, addNode, readOnly, evidenceActive, nodes, edges],
+    [
+      screenToFlowPosition,
+      addNode,
+      readOnly,
+      evidenceActive,
+      isAvailable,
+      nodes,
+      edges,
+    ],
   )
 
   return (
