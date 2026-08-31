@@ -16,6 +16,13 @@
  * The site-specific identities below (domain, NetBIOS, forest level, CA names,
  * CPS URL, lab admin password) are read from `VITE_PKI_*` env vars so they can
  * be changed per-deployment without editing code — see `frontend/.env.example`.
+ *
+ * Node positions are the HMHS reference lab's, translated as a block into
+ * positive space so the whole topology sits inside `DEFAULT_VIEWPORT` rather
+ * than off its top-left corner. They are laid out by hand rather than derived,
+ * because the domain circle's radius follows its farthest member: the earlier
+ * spacing sat the web server almost on top of the DC and pushed the issuing CA
+ * against the rim, so the circle read as a blob rather than a boundary.
  */
 
 import { DEFAULT_VIEWPORT, useTopologyStore } from "@/store/topology"
@@ -91,7 +98,7 @@ export function buildPkiTemplateIntoStores(
   const rootId = addConfigured(
     "certificateAuthority",
     "CA01",
-    { x: 80, y: 100 },
+    { x: 80, y: 60 },
     {
       caType: "Root",
       commonName: PKI.rootCaCn,
@@ -102,7 +109,7 @@ export function buildPkiTemplateIntoStores(
   const issuingId = addConfigured(
     "certificateAuthority",
     "CA02",
-    { x: 500, y: 140 },
+    { x: 441, y: 380 },
     {
       caType: "Issuing",
       commonName: PKI.issuingCaCn,
@@ -114,7 +121,7 @@ export function buildPkiTemplateIntoStores(
   const dcId = addConfigured(
     "domainController",
     "DC01",
-    { x: 720, y: 420 },
+    { x: 813, y: 494 },
     {
       domainName: PKI.domainName,
       netbiosName: netbiosPrefixed
@@ -127,7 +134,7 @@ export function buildPkiTemplateIntoStores(
   const webId = addConfigured(
     "webServer",
     "SRV1",
-    { x: 740, y: 340 },
+    { x: 989, y: 202 },
     {
       certEnrollPath: "C:\\CertEnroll",
       enableOcsp: "Enabled",
