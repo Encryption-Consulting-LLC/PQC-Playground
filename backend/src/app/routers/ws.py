@@ -35,6 +35,7 @@ import json
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect
 
 from app.core.authz import Role, resolve_user_token
+from app.core.guest_errors import guest_job_payload
 from app.core.console import sessions, tickets
 from app.core.console.guacd import GuacdError, connect, rdp_parameters
 from app.core.console.relay import relay
@@ -129,14 +130,23 @@ async def job_progress(
 
         await websocket.accept()
 
+        # The one place a guest's deploy failures are narrowed. Every frame
+        # leaves through here — the cold replay, the snapshot, and the live
+        # stream — so this covers all three without the producer, Mongo or the
+        # Valkey snapshot losing the real text the admin console reads back.
+        async def send(payload: dict) -> None:
+            if user.role is Role.GUEST:
+                payload = guest_job_payload(payload)
+            await send_json_or_disconnect(websocket, payload)
+
         for msg in replayed:
-            await send_json_or_disconnect(websocket, msg)
+            await send(msg)
             if msg["type"] in TERMINAL_TYPES:
                 return
 
         last = snapshot["last"] if snapshot is not None else None
         if last is not None:
-            await send_json_or_disconnect(websocket, last)
+            await send(last)
             if last["type"] in TERMINAL_TYPES:
                 return
 
@@ -149,7 +159,7 @@ async def job_progress(
                 await send_json_or_disconnect(websocket, _HEARTBEAT)
                 continue
             msg = json.loads(raw["data"])
-            await send_json_or_disconnect(websocket, msg)
+            await send(msg)
             if msg["type"] in TERMINAL_TYPES:
                 break
     except WebSocketDisconnect:

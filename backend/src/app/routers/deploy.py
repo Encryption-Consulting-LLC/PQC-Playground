@@ -538,6 +538,22 @@ async def _refuse_joined_lab_deploy(project_id: str | None, user: AuthedUser) ->
         )
 
 
+def _visible_preflight(preflight: dict | None, user: AuthedUser) -> dict | None:
+    """The preflight receipt, withheld from guests.
+
+    It is an operator's diagnostic — what the route verified against the live
+    ESXi host — and every row names a datastore, a VMX path, an image revision
+    or a port group *even when it passes*, alongside capacity bytes and the
+    org's own usage limit. Narrowing the rows would leave a checklist saying
+    "this check passed" ten times, which is noise rather than reassurance, so a
+    guest simply does not get one; ``PreflightReceipt`` already renders nothing
+    for a null receipt. Both doors are covered — the 202 and the rehydration
+    GET a reload comes back through — because the panel is restored from either.
+    """
+
+    return None if user.role is Role.GUEST else preflight
+
+
 @router.post(
     "",
     status_code=202,
@@ -717,10 +733,13 @@ async def deploy(
         user.username,
     )
     # The preflight rides back as a receipt: it was computed anyway, and the
-    # client renders what was verified during the otherwise-opaque wait.
+    # client renders what was verified during the otherwise-opaque wait. Not to
+    # a guest, though — see ``_visible_preflight``.
     return {
         "job_id": job_id,
-        "preflight": preflight.model_dump(by_alias=True) if preflight else None,
+        "preflight": _visible_preflight(
+            preflight.model_dump(by_alias=True) if preflight else None, user
+        ),
     }
 
 
@@ -777,7 +796,7 @@ async def get_deploy_run(
     return {
         "jobId": job_id,
         "createdAt": run.get("createdAt"),
-        "preflight": run.get("preflight"),
+        "preflight": _visible_preflight(run.get("preflight"), user),
         "groups": groups,
     }
 

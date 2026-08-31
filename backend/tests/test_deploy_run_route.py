@@ -182,9 +182,11 @@ def plan_runs(monkeypatch):
 
 
 def test_the_owner_gets_the_start_time_preflight_and_manifest(plan_runs) -> None:
+    # An operator, because the receipt is an operator's diagnostic — a guest
+    # owner gets the same run without it (see below).
     plan_runs(_run_doc())
 
-    response = asyncio.run(get_deploy_run(JOB_ID, _user("gina")))
+    response = asyncio.run(get_deploy_run(JOB_ID, _user("gina", Role.OPERATOR)))
 
     assert response["jobId"] == JOB_ID
     assert response["createdAt"] == 1_785_781_000_000
@@ -263,8 +265,24 @@ def test_an_unrebuildable_manifest_still_returns_the_timer_and_receipt(
     regression this route exists to fix."""
     plan_runs(_run_doc(topology={"version": 1, "nodes": [], "edges": []}))
 
-    response = asyncio.run(get_deploy_run(JOB_ID, _user("gina")))
+    response = asyncio.run(get_deploy_run(JOB_ID, _user("gina", Role.OPERATOR)))
 
     assert response["groups"] == []
     assert response["createdAt"] == 1_785_781_000_000
     assert response["preflight"] == PREFLIGHT
+
+
+def test_a_guest_owner_is_rehydrated_without_the_receipt(plan_runs) -> None:
+    """The receipt names a datastore, a VMX path and an image revision on every
+    row, passing rows included. A guest reloading mid-deploy still needs the
+    clock and the manifest — losing those is the regression this route exists to
+    fix — so only the receipt is withheld, and the panel renders nothing for a
+    null one rather than an empty checklist."""
+
+    plan_runs(_run_doc())
+
+    response = asyncio.run(get_deploy_run(JOB_ID, _user("gina")))
+
+    assert response["preflight"] is None
+    assert response["createdAt"] == 1_785_781_000_000
+    assert response["groups"] != []

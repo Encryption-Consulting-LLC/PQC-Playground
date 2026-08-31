@@ -30,7 +30,7 @@ code needs to change for allowlist adjustments.
 
 from enum import Enum
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core.identity import AuthProvenance, decode_token
@@ -277,8 +277,18 @@ async def resolve_user_token(token: str | None) -> AuthedUser | None:
 SESSION_REJECTED_HEADERS = {"WWW-Authenticate": "Session"}
 
 
-async def get_current_user(x_session_token: str = Header(...)) -> AuthedUser:
-    """FastAPI dependency: resolve X-Session-Token → AuthedUser (401 if invalid)."""
+async def get_current_user(
+    request: Request, x_session_token: str = Header(...)
+) -> AuthedUser:
+    """FastAPI dependency: resolve X-Session-Token → AuthedUser (401 if invalid).
+
+    The resolved role is recorded on ``request.state`` purely so the error
+    handlers can narrow what a guest is told (``core.guest_errors``) without
+    every one of the ~120 ``HTTPException`` raise sites having to know who is
+    asking. It is a side effect of the real dependency on purpose: this runs
+    before the router body, before ``get_esxi`` and before body validation, so
+    the role is always present by the time anything downstream can fail.
+    """
     user = await resolve_user_token(x_session_token)
     if user is None:
         raise HTTPException(
@@ -286,6 +296,7 @@ async def get_current_user(x_session_token: str = Header(...)) -> AuthedUser:
             detail="Invalid or expired session token.",
             headers=SESSION_REJECTED_HEADERS,
         )
+    request.state.role = user.role
     return user
 
 

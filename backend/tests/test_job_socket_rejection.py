@@ -119,32 +119,59 @@ def test_an_unknown_job_closes_with_4404_rather_than_denying_the_handshake(
     assert close_code(client, "/ws/jobs/job9?token=t") == 4404
 
 
+_EVICTED_RUN = {
+    "jobId": "job9",
+    "owner": "gwen",
+    "scheduler": {
+        "ops": {
+            "clone-dc": {"status": "done"},
+            "iis-web": {
+                "status": "error",
+                "detail": "step 'iis.setup' timed out after 600s",
+                "trace": "Traceback (most recent call last):\n  ...",
+            },
+        },
+        "updatedAt": 1,
+    },
+}
+
+
 def test_an_evicted_snapshot_replays_the_persisted_outcome(client, monkeypatch) -> None:
-    monkeypatch.setattr(ws, "resolve_user_token", _as("guest", Role.GUEST))
+    monkeypatch.setattr(ws, "resolve_user_token", _as("gwen", Role.OPERATOR))
     monkeypatch.setattr(ws.transport, "read_snapshot", _snapshot(None))
-    monkeypatch.setattr(
-        ws,
-        "plan_runs_col",
-        _plan_run(
-            {
-                "jobId": "job9",
-                "owner": "guest",
-                "scheduler": {
-                    "ops": {
-                        "clone-dc": {"status": "done"},
-                        "iis-web": {"status": "error", "detail": "feature timeout"},
-                    },
-                    "updatedAt": 1,
-                },
-            }
-        ),
-    )
+    monkeypatch.setattr(ws, "plan_runs_col", _plan_run(_EVICTED_RUN))
 
     with client.websocket_connect("/ws/jobs/job9?token=t") as socket:
         message = socket.receive_json()
 
     assert message["type"] == "done"
-    assert message["result"]["ops"]["iis-web"]["detail"] == "feature timeout"
+    op = message["result"]["ops"]["iis-web"]
+    assert op["detail"] == "step 'iis.setup' timed out after 600s"
+    assert op["trace"].startswith("Traceback")
+
+
+def test_a_guest_is_not_replayed_the_raw_failure(client, monkeypatch) -> None:
+    """The terminal frame carries its ops at ``result.ops``, not ``ops``.
+
+    That is the frame a failed deploy actually ends on, so narrowing only the
+    top-level key would have left every real failure reaching the guest
+    verbatim — step ids, probe timeouts and a Python traceback — while looking
+    like the feature worked on the in-flight frames.
+    """
+
+    monkeypatch.setattr(ws, "resolve_user_token", _as("gwen", Role.GUEST))
+    monkeypatch.setattr(ws.transport, "read_snapshot", _snapshot(None))
+    monkeypatch.setattr(ws, "plan_runs_col", _plan_run(_EVICTED_RUN))
+
+    with client.websocket_connect("/ws/jobs/job9?token=t") as socket:
+        message = socket.receive_json()
+
+    assert message["type"] == "done"
+    op = message["result"]["ops"]["iis-web"]
+    assert op["detail"] == "This machine could not be set up."
+    assert "trace" not in op
+    # The op it did not fail on is untouched apart from carrying no detail.
+    assert message["result"]["ops"]["clone-dc"]["status"] == "done"
 
 
 def test_another_users_deployment_is_not_replayable(client, monkeypatch) -> None:
