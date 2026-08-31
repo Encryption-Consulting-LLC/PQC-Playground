@@ -57,3 +57,14 @@ export const CONNECTION_HEALTH = {
 
 export type ConnectionHealth =
   (typeof CONNECTION_HEALTH)[keyof typeof CONNECTION_HEALTH]
+
+/**
+ * The footprint of a `draft` machine card, in flow units.
+ *
+ * Every node starts `draft`, so this is the size of the card a template turns
+ * into the instant it is dropped — which is what `Canvas`'s drop handler needs
+ * to centre it on the pointer, before React Flow has measured anything. Lives
+ * here rather than in `MachineNode` so the component file keeps exporting only
+ * components; `MachineNode` reads its own width and draft height back off it.
+ */
+export const DRAFT_NODE_SIZE = { width: 304, height: 92 } as const

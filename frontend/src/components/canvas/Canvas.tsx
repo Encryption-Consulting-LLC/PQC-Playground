@@ -31,7 +31,7 @@ import {
 import { opsReferencingNode, useStagingStore } from "@/store/staging"
 import { useIsJoinedLab } from "@/hooks/useJoinedLab"
 import { OP_KIND, actionableOps, type StagedOp } from "@/lib/staging"
-import { EDGE_TYPE } from "@/constants/topology"
+import { DRAFT_NODE_SIZE, EDGE_TYPE } from "@/constants/topology"
 import {
   domainJoinBlockReason,
   domainJoinOperations,
@@ -687,10 +687,16 @@ export function Canvas() {
       const typeId = e.dataTransfer.getData(DRAG_TYPE)
       if (!typeId) return
 
-      const position = screenToFlowPosition({
-        x: e.clientX,
-        y: e.clientY,
-      })
+      // React Flow positions a node by its top-left corner, so handing it the
+      // pointer verbatim drops the card down-right of the cursor and the user
+      // aims by guessing at an offset. Centre it instead: the pointer lands in
+      // the middle of the card it just placed, which is also what the
+      // domain-overlap test below should be asked about.
+      const dropped = screenToFlowPosition({ x: e.clientX, y: e.clientY })
+      const position = {
+        x: dropped.x - DRAFT_NODE_SIZE.width / 2,
+        y: dropped.y - DRAFT_NODE_SIZE.height / 2,
+      }
       const draftNode: Node<MachineData> = {
         id: "drop-preview",
         type: "machine",

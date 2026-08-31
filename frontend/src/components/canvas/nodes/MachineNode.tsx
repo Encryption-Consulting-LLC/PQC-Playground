@@ -18,7 +18,12 @@ import {
 import type { NodeProps, Node } from "@xyflow/react"
 import { cn } from "@/lib/utils"
 import { TEMPLATE_BY_ID } from "@/constants/templates"
-import { EDGE_TYPE, LIFECYCLE, SERVICE_SOCKET } from "@/constants/topology"
+import {
+  DRAFT_NODE_SIZE,
+  EDGE_TYPE,
+  LIFECYCLE,
+  SERVICE_SOCKET,
+} from "@/constants/topology"
 import type { Lifecycle, ServiceSocket } from "@/constants/topology"
 import {
   SERVICE_SOCKET_GUIDANCE,
@@ -42,10 +47,10 @@ import type { MachineData } from "@/store/topology"
 import { Badge } from "@/components/ui/badge"
 import { ProgressBar } from "./ProgressBar"
 
-const MACHINE_NODE_WIDTH = 304
+const MACHINE_NODE_WIDTH = DRAFT_NODE_SIZE.width
 const MACHINE_NODE_MIN_HEIGHT = 160
 const BOTTOM_SOCKET_GUTTER = 28
-const DRAFT_NODE_HEIGHT = 92
+const DRAFT_NODE_HEIGHT = DRAFT_NODE_SIZE.height
 const SOCKET_ROW_HEIGHT = 24
 const COMPACT_CARD_SIDE_SOCKET_ROWS = 2
 
