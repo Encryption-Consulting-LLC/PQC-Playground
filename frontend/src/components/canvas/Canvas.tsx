@@ -748,10 +748,17 @@ export function Canvas() {
         proOptions={{ hideAttribution: true }}
         nodesDraggable={!readOnly && !evidenceActive}
         nodesConnectable={!readOnly && !evidenceActive}
-        // Selection stays live in a joined lab on purpose: picking a machine is
-        // how its inspector — and so its remote desktop — is reached, which is
-        // the whole of what a joined lab offers.
-        elementsSelectable={!deploying && !evidenceActive}
+        // Selection stays live through both locks on purpose: picking a
+        // machine is how its inspector is reached, and the inspector is where
+        // a deploy is *read* — config, live progress, per-step detail, and the
+        // remote desktop of a machine the plan has already finished with. With
+        // this off, whatever happened to be selected when Deploy was pressed
+        // was the only node inspectable for the length of the run, which on a
+        // long plan means the one thing a watching user wants to do is the one
+        // thing they cannot. Editing stays locked where it matters —
+        // `nodesDraggable`/`nodesConnectable` above, the store's own guards,
+        // and every mutating inspector control disabled on `deploying`.
+        elementsSelectable={!evidenceActive}
       >
         <DomainRegions preview={domainDragPreview} />
         <Background gap={16} size={1} />
@@ -829,7 +836,7 @@ export function Canvas() {
         <div className="pointer-events-none absolute inset-x-0 top-0 z-10 flex justify-center pt-3">
           <div className="pointer-events-auto flex items-center gap-2 rounded-full border bg-background/95 px-3 py-1 text-xs text-muted-foreground shadow-sm">
             <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-sky-500" />
-            Deploying — canvas locked
+            Deploying — editing locked, inspector live
           </div>
         </div>
       ) : (
