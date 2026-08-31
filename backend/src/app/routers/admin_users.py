@@ -6,9 +6,11 @@ self-serve signup. OIDC accounts appear here too (upserted at first SSO
 login) — they can be disabled but hold no password, so password operations
 on them are rejected.
 
-There is deliberately no DELETE: ``disabled`` covers revocation (it takes
-effect on the target's next request — see ``authz.resolve_user_token``) and
-keeps future ``owner`` references from dangling.
+``disabled`` remains the default revocation: it is reversible, it takes effect
+on the target's next request (see ``authz.resolve_user_token``) and it keeps
+``owner`` references resolvable. DELETE is the other end — for the account that
+should leave no trace — and is therefore interlocked rather than cascading
+freely; see ``delete_user``.
 """
 
 import re
@@ -23,10 +25,20 @@ from app.core.authz import (
     get_current_user,
     require_capability,
 )
-from app.core.db import now_ms, to_mongo, users_col
+from app.core.db import (
+    lab_invites_col,
+    now_ms,
+    plan_runs_col,
+    project_shares_col,
+    projects_col,
+    to_mongo,
+    users_col,
+    vm_registry_col,
+)
 from app.core.db.models import UserDoc
 from app.core.identity import hash_password
 from app.core.infrastructure import PRODUCT_ROLES
+from app.core.jobs.replay import PLAN_TERMINAL_STATUSES
 
 router = APIRouter(
     prefix="/admin/users",
@@ -157,3 +169,109 @@ async def patch_user(
         await users_col().update_one({"username": username}, {"$set": fields})
         doc = await users_col().find_one({"username": username})
     return _present(doc)
+
+
+async def _live_vm_names(username: str) -> list[str]:
+    """VMs this account still owns on the host, newest state first.
+
+    ``deleted`` is the registry's tombstone (teardown soft-deletes rather than
+    dropping the row), so anything else — including ``cloning`` and ``error`` —
+    is a machine that may still exist and still holds a pool address.
+    """
+    return sorted(
+        [
+            doc["vmName"]
+            async for doc in vm_registry_col().find(
+                {"owner": username, "status": {"$ne": "deleted"}},
+                projection={"vmName": 1},
+            )
+        ]
+    )
+
+
+async def _active_job_id(username: str) -> str | None:
+    """The account's first still-running deploy run, if any."""
+    async for doc in plan_runs_col().find(
+        {"owner": username, "scheduler.ops": {"$exists": True}},
+        projection={"jobId": 1, "scheduler.ops": 1},
+    ):
+        ops = (doc.get("scheduler") or {}).get("ops") or {}
+        if any(
+            (op or {}).get("status") not in PLAN_TERMINAL_STATUSES
+            for op in ops.values()
+        ):
+            return doc.get("jobId")
+    return None
+
+
+@router.delete("/{username}")
+async def delete_user(
+    username: str, admin: AuthedUser = Depends(get_current_user)
+) -> dict:
+    """Erase an account and the workspace state only it could reach.
+
+    Deletion is for the account that should leave no trace — a finished
+    evaluation, a username provisioned by mistake — where ``disabled`` would
+    leave a permanent row nobody dares reuse. The session dies with the
+    document, since ``resolve_user_token`` re-reads it on every request.
+
+    Two interlocks, both refusals rather than cascades, because each names work
+    an admin has to decide about rather than data to sweep up:
+
+    * **live VMs** — the account is the only self-service door to them
+      (``DELETE /api/vm/{name}``), so deleting it first strands them in the
+      finite guest pool with the admin teardown console as the sole way back.
+    * **an active deployment** — it is still cloning machines under this owner
+      and would go on doing so after the owner no longer exists.
+
+    What *is* swept is the state that becomes unreachable the moment the
+    account is gone: its projects (every read is ``owner``-filtered, so they
+    would join the legacy ``owner: None`` documents nobody can open), the
+    shares it published, and the lab codes minted against it — that last one
+    being the only leftover that is a live access path rather than dead data.
+    ``plan_runs`` and the soft-deleted ``vm_registry`` rows stay: they are the
+    deployment record the admin console reads, and they expire on their own
+    TTLs.
+
+    An OIDC account is re-created at its owner's next SSO login, so ``disabled``
+    is still what keeps one of those out for good.
+    """
+    doc = await users_col().find_one({"username": username})
+    if doc is None:
+        raise HTTPException(404, detail=f"No user '{username}'.")
+    # Same self-lockout guard as disabling, and for the same reason — except
+    # this one has no undo.
+    if username == admin.username:
+        raise HTTPException(422, detail="You cannot delete your own account.")
+
+    live_vms = await _live_vm_names(username)
+    if live_vms:
+        raise HTTPException(
+            409,
+            detail=(
+                f"'{username}' still owns {len(live_vms)} VM(s): "
+                f"{', '.join(live_vms)}. Tear them down first, then delete the account."
+            ),
+        )
+
+    active_job = await _active_job_id(username)
+    if active_job is not None:
+        raise HTTPException(
+            409,
+            detail=(
+                f"'{username}' has a deployment still running ({active_job}). "
+                "Stop it first, then delete the account."
+            ),
+        )
+
+    projects = await projects_col().delete_many({"owner": username})
+    shares = await project_shares_col().delete_many({"owner": username})
+    invites = await lab_invites_col().delete_many({"owner": username})
+    await users_col().delete_one({"username": username})
+
+    return {
+        "username": username,
+        "projectsDeleted": projects.deleted_count,
+        "sharesDeleted": shares.deleted_count,
+        "labInvitesDeleted": invites.deleted_count,
+    }
