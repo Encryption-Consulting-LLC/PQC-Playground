@@ -52,7 +52,7 @@ from app.core.golden_image import (
     golden_image_config_from_doc,
 )
 from app.core.ippool import guest_network_from_doc
-from app.core.labs import joined_lab_project_ids
+from app.core.labs import joined_lab_project_ids, lab_grants_run_access
 from app.core.infrastructure import (
     LINUX_PRODUCT_BASE,
     LINUX_PRODUCT_TEMPLATES,
@@ -778,7 +778,16 @@ async def download_evidence(
     run = await plan_runs_col().find_one({"jobId": job_id})
     if run is None:
         raise HTTPException(404, detail=f"Evidence for job '{job_id}' was not found.")
-    if user.role is not Role.OPERATOR and run.get("owner") != user.username:
+    # The one place a join code widens reach past the plain owner check on this
+    # router, and the same widening ``enforce_own_or_joined_vm`` already makes
+    # for remote desktop: a lab member is holding the topology this run built,
+    # and the evidence bundle is what explains it. Every other route here —
+    # status, cancel, the manifest — keeps the owner-only check.
+    if (
+        user.role is not Role.OPERATOR
+        and run.get("owner") != user.username
+        and not await lab_grants_run_access(run, user.username)
+    ):
         raise HTTPException(403, detail="This deployment belongs to another user.")
     payload, digest = build_evidence_bundle(run)
     return StreamingResponse(

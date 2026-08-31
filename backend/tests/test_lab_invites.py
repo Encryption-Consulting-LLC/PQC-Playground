@@ -11,9 +11,11 @@ map a typo onto a different real lab.
 state (job ids, staged ops) belongs to the account that deployed it, and a
 canvas that inherits it reattaches to sockets that reject it.
 
-*The reach a member gains*, which is exactly one thing: the remote-desktop
-check stops refusing the lab's VMs. Deleting, provisioning and deploying stay
-refused, and that is the whole "view and remote desktop" contract.
+*The reach a member gains*, which is two things and no more: the
+remote-desktop check stops refusing the lab's VMs, and the evidence bundle for
+the run that built it becomes downloadable. Deleting, provisioning and
+deploying stay refused, and that is the whole "view, explain and connect"
+contract.
 
 *Revocation*, which is the cohort-wide off switch — it must take back the
 desktop access it granted, not merely hide the lab from a list.
@@ -338,6 +340,30 @@ def test_owning_a_lab_you_also_hold_a_code_for_still_deploys(monkeypatch):
     )
 
     asyncio.run(deploy_router._refuse_joined_lab_deploy(PROJECT_ID, _guest()))
+
+
+def test_a_member_downloads_the_lab_s_evidence_but_not_a_stranger_s(monkeypatch):
+    """The bundle explains the topology a member is already looking at, so the
+    evidence route carries the lab clause. It is keyed on the run's projectId —
+    a run that records no project cannot prove which lab it belongs to."""
+    _wire(monkeypatch)
+    minted = asyncio.run(
+        labs_router.create_invite(
+            labs_router.InviteCreate(projectId=PROJECT_ID), _admin()
+        )
+    )
+    asyncio.run(
+        labs_router.join_lab(labs_router.JoinRequest(code=minted["code"]), _guest())
+    )
+
+    lab_run = {"jobId": "job-1", "owner": "operator", "projectId": PROJECT_ID}
+    assert asyncio.run(labs.lab_grants_run_access(lab_run, "carol")) is True
+    assert asyncio.run(labs.lab_grants_run_access(lab_run, "dan")) is False
+
+    other = {"jobId": "job-2", "owner": "operator", "projectId": "another-project"}
+    assert asyncio.run(labs.lab_grants_run_access(other, "carol")) is False
+    unattributed = {"jobId": "job-3", "owner": "operator", "projectId": None}
+    assert asyncio.run(labs.lab_grants_run_access(unattributed, "carol")) is False
 
 
 def test_a_member_sees_the_lab_s_agents_but_still_cannot_command_them(monkeypatch):

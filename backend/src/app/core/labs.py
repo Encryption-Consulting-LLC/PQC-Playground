@@ -207,6 +207,27 @@ async def enforce_own_or_joined_vm(vm_name: str, user: "AuthedUser") -> None:
             raise
 
 
+async def lab_grants_run_access(run: Mapping[str, Any], username: str) -> bool:
+    """Whether a live invite this account holds covers this deploy run.
+
+    The evidence bundle's counterpart to ``lab_grants_vm_access``: a lab member
+    is looking at the very topology this run produced, so refusing them its
+    manifest and public artifacts withholds the explanation of what they can
+    already see and click through. The bundle is redacted before it is stored
+    (``core/evidence.redact_evidence``), so what widens here is the account's
+    reach to *this run*, never the run's own secrecy.
+
+    Membership is matched on the run's ``projectId`` — the only link a
+    ``plan_runs`` document keeps back to the project an invite names. A run
+    written before that field existed has no way to prove which lab it belongs
+    to and is refused.
+    """
+    project_id = run.get("projectId")
+    if not project_id:
+        return False
+    return project_id in await joined_lab_project_ids(username)
+
+
 async def lab_grants_vm_access(vm_name: str, username: str) -> bool:
     """Whether a live invite this account holds covers this VM.
 

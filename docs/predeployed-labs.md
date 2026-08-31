@@ -7,11 +7,12 @@ the code decides which lab they land in. One deployment of the playground can
 therefore serve as many prepared labs as there are groups of people, and one
 group can be pointed at a lab built specifically for it.
 
-Redeeming a code grants exactly two things: the lab's topology, rendered on the
-canvas as it was deployed, and a remote desktop session to each of its machines.
-It grants nothing else. Deploying into the lab, tearing its VMs down, running
-provisioning steps, editing its saved project and issuing agent commands are all
-refused by the backend, not merely hidden in the interface.
+Redeeming a code grants exactly three things: the lab's topology, rendered on the
+canvas as it was deployed; a remote desktop session to each of its machines; and
+the evidence bundle for the deployment that built it, downloadable from Evidence
+mode. It grants nothing else. Deploying into the lab, tearing its VMs down,
+running provisioning steps, editing its saved project and issuing agent commands
+are all refused by the backend, not merely hidden in the interface.
 
 ## Roles in the workflow
 
