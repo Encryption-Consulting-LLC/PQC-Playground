@@ -12,7 +12,6 @@ import {
 import {
   Handle,
   Position,
-  useEdges,
   useNodes,
   useUpdateNodeInternals,
 } from "@xyflow/react"
@@ -324,7 +323,12 @@ export function MachineNode({
 }: NodeProps<Node<MachineData>>) {
   const def = TEMPLATE_BY_ID[data.typeId]
   const nodes = useNodes<Node<MachineData>>()
-  const edges = useEdges()
+  // Logical edges, not React Flow's. `Canvas` withholds `domainJoin` edges
+  // from React Flow on purpose (the domain circle draws membership, and a DC
+  // exposes no generic target handle), so `useEdges()` cannot see a join —
+  // every member read "Not joined" and every DC "Members 0" while the circle
+  // around them counted two.
+  const edges = useTopologyStore((s) => s.edges)
   const isOverlapping = useTopologyStore((s) => s.overlapNodeId === id)
   // Pre-execution echo: this node's clone is in the in-flight plan but no op
   // has started yet (route preflight / worker queue / worker setup).
