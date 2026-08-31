@@ -322,20 +322,50 @@
   animation: trust-gravity-settle 480ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+/*
+ * The trust-tier glow is painted by a pseudo-element rather than by the node's
+ * own `box-shadow`, because these rules are unlayered and so beat every
+ * Tailwind utility in `@layer utilities` — including the ones that are also
+ * box-shadows. A CA node therefore silently swallowed its `ring-2 ring-primary`
+ * selection ring, its `ring-emerald-400` compatible-drop-target ring, and its
+ * overlap warning ring: clicking a CA looked like nothing happened, while
+ * every non-CA node ringed normally. Off the box-shadow property they compose
+ * instead of competing. `border-color` below stays on the element on purpose —
+ * it is meant to outrank the lifecycle border utilities.
+ *
+ * `z-index: -1` is load-bearing, not tidiness. A positioned pseudo-element
+ * otherwise paints *above* its own element's box-shadow, so the glow merely
+ * moved from erasing the selection ring to tinting it: a selected root CA came
+ * out tan (measured rgb(89,119,190) against the intended rgb(47,111,240)).
+ * Negative z-index paints the glow before the card, and since the shadow
+ * spreads outside the card's box, nothing of it is lost behind the card.
+ */
+.trust-body::before {
+  content: "";
+  position: absolute;
+  z-index: -1;
+  inset: -1px;
+  border-radius: inherit;
+  pointer-events: none;
+}
+
 .trust-body-root {
   border-color: rgb(245 158 11 / 72%);
+}
+
+.trust-body-root::before {
   box-shadow:
     0 0 0 5px rgb(245 158 11 / 8%),
     0 0 30px 8px rgb(245 158 11 / 22%);
 }
 
-.trust-body-intermediate {
+.trust-body-intermediate::before {
   box-shadow:
     0 0 0 3px rgb(245 158 11 / 7%),
     0 0 22px 5px rgb(245 158 11 / 17%);
 }
 
-.trust-body-issuing {
+.trust-body-issuing::before {
   box-shadow:
     0 0 0 2px rgb(245 158 11 / 6%),
     0 0 16px 3px rgb(245 158 11 / 13%);
