@@ -1,18 +1,19 @@
 import { useState } from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
-import { Boxes, KeyRound, Loader2, Plus, ShieldAlert } from "lucide-react"
+import { Boxes, KeyRound, Loader2, Plus, ShieldAlert, Trash2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { QUERY_KEYS } from "@/constants"
 import {
   createUser,
+  deleteUser,
   listUsers,
   patchUser,
   PRODUCT_TEMPLATES,
   type AdminUser,
   type UserCreateRequest,
 } from "@/lib/api"
-import { formatDate, showError } from "@/lib/display"
+import { formatDate, plural, showError } from "@/lib/display"
 import { useMe } from "@/hooks/useMe"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -49,9 +50,13 @@ import {
 
 /**
  * Guest/operator account control — the reason this app exists. Every action
- * here is the existing operator-only /api/admin/users surface with a UI on
- * top: list, create, enable/disable, role change, password reset. There is
- * deliberately no delete (matches the backend — disabling covers revocation).
+ * here is the existing admin-only /api/admin/users surface with a UI on top:
+ * list, create, enable/disable, role change, password reset, delete.
+ *
+ * Disabling and deleting are deliberately not the same control. Disabling is
+ * the everyday revocation — one click, reversible, and the row stays. Deleting
+ * erases the account and its workspace state, so it is a separate icon behind
+ * a dialog that wants the username typed back.
  */
 export function UsersSection() {
   const me = useMe()
@@ -65,6 +70,7 @@ export function UsersSection() {
   const [disableTarget, setDisableTarget] = useState<AdminUser | null>(null)
   const [resetTarget, setResetTarget] = useState<AdminUser | null>(null)
   const [productsTarget, setProductsTarget] = useState<AdminUser | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<AdminUser | null>(null)
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: QUERY_KEYS.users })
 
@@ -72,6 +78,20 @@ export function UsersSection() {
     mutationFn: ({ username, body }: { username: string; body: Parameters<typeof patchUser>[1] }) =>
       patchUser(username, body),
     onSuccess: invalidate,
+    onError: showError,
+  })
+
+  const deleteMutation = useMutation({
+    mutationFn: (username: string) => deleteUser(username),
+    onSuccess: (result) => {
+      invalidate()
+      setDeleteTarget(null)
+      toast.success(`Deleted ${result.username}.`, {
+        description: describeCascade(result),
+      })
+    },
+    // A refusal (still owns VMs, deployment running) leaves the dialog open:
+    // the admin has work to do elsewhere and then comes back to this button.
     onError: showError,
   })
 
@@ -213,6 +233,20 @@ export function UsersSection() {
                           disabled={patchMutation.isPending || user.username === me?.username}
                           aria-label={user.disabled ? "Enable account" : "Disable account"}
                         />
+                        {/* Fenced off from the toggle beside it: one is the
+                            everyday revocation, the other has no undo. */}
+                        <span aria-hidden className="h-4 w-px bg-border" />
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          title="Delete account"
+                          aria-label="Delete account"
+                          className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                          disabled={user.username === me?.username}
+                          onClick={() => setDeleteTarget(user)}
+                        >
+                          <Trash2 className="size-4" />
+                        </Button>
                       </div>
                     </TableCell>
                   </TableRow>
@@ -259,6 +293,14 @@ export function UsersSection() {
         pending={patchMutation.isPending}
       />
 
+      <DeleteUserDialog
+        key={deleteTarget?.username ?? "none"}
+        user={deleteTarget}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => deleteTarget && deleteMutation.mutate(deleteTarget.username)}
+        pending={deleteMutation.isPending}
+      />
+
       <ResetPasswordDialog
         user={resetTarget}
         onCancel={() => setResetTarget(null)}
@@ -272,6 +314,113 @@ export function UsersSection() {
         pending={patchMutation.isPending}
       />
     </div>
+  )
+}
+
+/** One line naming what the delete took with it, or nothing if it took only the account. */
+function describeCascade(result: {
+  projectsDeleted: number
+  sharesDeleted: number
+  labInvitesDeleted: number
+}): string | undefined {
+  const swept = [
+    [result.projectsDeleted, "project"],
+    [result.sharesDeleted, "share link"],
+    [result.labInvitesDeleted, "lab code"],
+  ] as const
+  const parts = swept
+    .filter(([count]) => count > 0)
+    .map(([count, noun]) => plural(count, noun))
+  return parts.length > 0 ? `Also removed ${parts.join(", ")}.` : undefined
+}
+
+/**
+ * Deletion confirmation, with the username typed back.
+ *
+ * The rail is the typing, not the prose: this button sits one gap away from a
+ * toggle that is clicked all day, and a dialog whose only defence is a
+ * paragraph gets dismissed by reflex. What it deliberately does not do is
+ * predict the outcome — the server refuses an account that still owns VMs or
+ * has a deployment running, and that refusal is far more useful phrased in the
+ * server's own terms than pre-empted with a stale check here.
+ */
+function DeleteUserDialog({
+  user,
+  onCancel,
+  onConfirm,
+  pending,
+}: {
+  user: AdminUser | null
+  onCancel: () => void
+  onConfirm: () => void
+  pending: boolean
+}) {
+  const [typed, setTyped] = useState("")
+  const confirmed = user !== null && typed.trim() === user.username
+
+  return (
+    <Dialog open={user !== null} onOpenChange={(next) => !next && onCancel()}>
+      <DialogPortal>
+        <DialogBackdrop />
+        <DialogPopup className="w-[min(560px,calc(100vw-2rem))]">
+          <DialogTitle className="flex items-center gap-(--gap-inline)">
+            <Trash2 className="size-4 text-destructive" />
+            Delete {user?.username}?
+          </DialogTitle>
+          <DialogDescription>
+            The account, its saved projects, its share links and any lab join codes issued
+            for it are removed, and its session stops working on the next request. This
+            cannot be undone — disable the account instead if you may want it back.
+          </DialogDescription>
+
+          <DialogBody>
+            <ul className="space-y-(--gap-inline) rounded-lg border p-(--pad-control) text-xs text-muted-foreground">
+              <li>
+                Deployment history and torn-down VM entries stay — they are the record of
+                what this account built.
+              </li>
+              <li>
+                Refused while the account still owns a VM or has a deployment running.
+                Tear those down or stop them first.
+              </li>
+              {user?.auth === "oidc" && (
+                <li className="text-warning">
+                  This is an SSO account: it comes back at the next successful sign-in.
+                  Disable it instead to keep it out.
+                </li>
+              )}
+            </ul>
+            <div className="grid gap-(--gap-inline)">
+              <Label htmlFor="delete-confirm">
+                Type <span className="font-mono">{user?.username}</span> to confirm
+              </Label>
+              <Input
+                id="delete-confirm"
+                value={typed}
+                onChange={(e) => setTyped(e.target.value)}
+                autoComplete="off"
+                autoFocus
+              />
+            </div>
+          </DialogBody>
+
+          <DialogFooter>
+            <Button variant="outline" size="sm" onClick={onCancel}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              disabled={!confirmed || pending}
+              onClick={onConfirm}
+            >
+              {pending ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+              Delete account
+            </Button>
+          </DialogFooter>
+        </DialogPopup>
+      </DialogPortal>
+    </Dialog>
   )
 }
 

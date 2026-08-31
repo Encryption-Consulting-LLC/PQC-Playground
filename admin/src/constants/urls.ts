@@ -22,6 +22,7 @@ export const URLS = {
     list: "/admin/users",
     create: "/admin/users",
     patch: (username: string) => `/admin/users/${encodeURIComponent(username)}`,
+    remove: (username: string) => `/admin/users/${encodeURIComponent(username)}`,
   },
   settings: {
     root: "/settings",

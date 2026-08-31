@@ -211,6 +211,24 @@ export const patchUser = (username: string, body: UserPatchRequest) =>
     body: JSON.stringify(body),
   })
 
+/** What deleting the account swept up alongside the account document. */
+export interface UserDeleteResult {
+  username: string
+  projectsDeleted: number
+  sharesDeleted: number
+  labInvitesDeleted: number
+}
+
+/**
+ * Erase an account. Refused (409) while it still owns VMs or has a deployment
+ * running — both are things an admin has to resolve deliberately, so the
+ * server's message is what the UI shows rather than a guess made here.
+ */
+export const deleteUser = (username: string) =>
+  request<UserDeleteResult>(URLS.adminUsers.remove(username), {
+    method: "DELETE",
+  })
+
 // --- /settings -------------------------------------------------------------
 
 export type PkiRole =
