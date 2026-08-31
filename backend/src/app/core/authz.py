@@ -66,7 +66,7 @@ class Capability(str, Enum):
     LAB_ADMIN = "lab:admin"
     CONFIG_GENERATE = "config:generate"
     ISO_AUTHOR = "iso:author"
-    VM_EXEC_ARBITRARY = "vm:exec-arbitrary"  # reserved — operator-only escape hatch
+    VM_EXEC_ARBITRARY = "vm:exec-arbitrary"  # raw PowerShell on one's own VM
     DEPLOY = "deploy"
     DEPLOY_ADMIN = (
         "deploy:admin"  # admin cross-user deployment stop (the /admin console)
@@ -94,7 +94,19 @@ class Capability(str, Enum):
 #     arbitrary scripts as SYSTEM on first boot and bypass the guest IP pool —
 #     never a shared-playground surface. Gates the /iso routes and any
 #     createVm op carrying authored content (checked in validate_plan).
-#   VM_EXEC_ARBITRARY is reserved for the firstboot executor (future phase).
+#   VM_EXEC_ARBITRARY (raw PowerShell via the executor agent) is guest-eligible.
+#     It sounds like the widest capability here and is in fact one of the
+#     narrower ones: the executor command route resolves the agent's vm_id back
+#     to its registry row and applies ``enforce_guest_vm_ownership`` before
+#     dispatching, so the reach is a shell on a VM the holder already cloned,
+#     provisions and can destroy outright — the same blast radius VM_PROVISION
+#     and VM_CONSOLE already grant, reached by typing instead of clicking. What
+#     it is deliberately NOT is a shell on somebody else's VM; that boundary is
+#     the ownership check, not the capability.
+#     NOTE: the ``role`` string rides along to the agent, which re-checks it
+#     against its own ``authz::Role::capabilities()`` (pki-executor, a separate
+#     repo). Granting it here is one half — the agent must grant Guest the same
+#     capability or it refuses the command itself.
 #   DEPLOY is guest-eligible: the plan runner only does what a guest can already
 #     trigger directly (clones) plus simulated stub ops.
 #   VM_DELETE is guest-eligible: self-service teardown is the point —
@@ -128,8 +140,8 @@ class Capability(str, Enum):
 #   VM_CONSOLE (remote desktop) is granted to operators *and* guests: a session
 #     only reaches a VM the holder could already clone, provision and destroy,
 #     and it is ownership-scoped by ``enforce_guest_vm_ownership`` exactly like
-#     VM_DELETE. It is deliberately not VM_EXEC_ARBITRARY's peer — that one is a
-#     backend-dispatched shell on any VM, this one is a screen on your own.
+#     VM_DELETE, exactly like VM_EXEC_ARBITRARY beside it — a screen on your own
+#     VM and a shell on your own VM are the same boundary, drawn twice.
 #   LAB_JOIN is guest-eligible and is the whole point of join codes: an admin
 #     builds a lab, hands its code to the people it was built for, and they
 #     redeem it to see that already-deployed topology and open its desktops.
@@ -179,6 +191,7 @@ ROLE_CAPABILITIES: dict[Role, set[Capability]] = {
         Capability.VM_DELETE,
         Capability.VM_PROVISION,
         Capability.VM_CONSOLE,
+        Capability.VM_EXEC_ARBITRARY,
         Capability.LAB_JOIN,
         Capability.DEPLOY,
         Capability.PROJECT_READ,

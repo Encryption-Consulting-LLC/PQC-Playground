@@ -50,3 +50,13 @@ def test_lab_join_is_a_canvas_capability_and_issuing_is_admin_only():
     assert Capability.LAB_ADMIN in ROLE_CAPABILITIES[Role.ADMIN]
     assert Capability.LAB_ADMIN not in ROLE_CAPABILITIES[Role.OPERATOR]
     assert Capability.LAB_ADMIN not in ROLE_CAPABILITIES[Role.GUEST]
+
+
+def test_arbitrary_exec_is_a_guest_capability_scoped_by_ownership():
+    # A shell on your own VM sits at the same boundary as a screen on it: the
+    # capability says whether, ``enforce_guest_vm_ownership`` in the executor
+    # command route says whose. Dropping it from guests would take away a
+    # surface they can already reach by other means (provisioning, the
+    # console); dropping the ownership check is the thing that would matter.
+    assert Capability.VM_EXEC_ARBITRARY in ROLE_CAPABILITIES[Role.GUEST]
+    assert Capability.VM_EXEC_ARBITRARY not in ROLE_CAPABILITIES[Role.ADMIN]

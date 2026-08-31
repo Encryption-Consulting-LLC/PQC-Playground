@@ -29,7 +29,11 @@ export const CAPABILITIES = {
   vmPower: "vm:power",
   configGenerate: "config:generate",
   isoAuthor: "iso:author", // operator-only — authored/uploaded config ISOs
-  vmExecArbitrary: "vm:exec-arbitrary", // reserved — future executor phase
+  // Raw PowerShell through the executor agent. Held by operators *and*
+  // guests: the command route resolves the agent back to its registry row and
+  // applies the same own-namespace check as remote desktop, so the reach is a
+  // shell on a VM the holder already deploys and destroys.
+  vmExecArbitrary: "vm:exec-arbitrary",
   // Remote desktop. Held by operators *and* guests — a session only reaches a
   // VM the holder could already deploy and destroy, and the backend scopes it
   // to the caller's own VMs. Admins hold the separate vm:console-admin instead
