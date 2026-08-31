@@ -1,9 +1,10 @@
 import { useEffect, useState } from "react"
-import { KeyRound, Plus, Save, X } from "lucide-react"
+import { CloudCog, FilePlus2, Network, Plus, Save, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Menu, MenuContent, MenuItem, MenuTrigger } from "@/components/ui/menu"
 import { useProjectsStore } from "@/store/projects"
 import { useStagingStore } from "@/store/staging"
 import { ProjectDeleteDialog } from "./ProjectDeleteDialog"
@@ -20,6 +21,9 @@ export function ProjectTabBar() {
   const switchProject = useProjectsStore((s) => s.switchProject)
   const renameProject = useProjectsStore((s) => s.renameProject)
   const addProject = useProjectsStore((s) => s.addProject)
+  const addProjectFromTemplate = useProjectsStore(
+    (s) => s.addProjectFromTemplate,
+  )
   const deleteProject = useProjectsStore((s) => s.deleteProject)
   const saveActiveSnapshot = useProjectsStore((s) => s.saveActiveSnapshot)
   const deploying = useStagingStore((s) => s.deploying)
@@ -154,26 +158,39 @@ export function ProjectTabBar() {
         )
       })}
 
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        onClick={() => addProject()}
-        aria-label="New project"
-      >
-        <Plus />
-      </Button>
-
-      {canJoinLab && (
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          onClick={() => setJoinOpen(true)}
-          aria-label="Join a lab"
-          title="Join a lab with a code"
-        >
-          <KeyRound />
-        </Button>
-      )}
+      {/* The same three ways in as the landing page — that screen only shows
+          when no project is open, so without this the template and lab-join
+          paths were unreachable once one was. */}
+      <Menu>
+        <MenuTrigger
+          render={
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              aria-label="New project"
+              title="New project"
+            >
+              <Plus />
+            </Button>
+          }
+        />
+        <MenuContent>
+          <MenuItem onClick={() => addProject()}>
+            <FilePlus2 className="text-sky-500" />
+            Empty Project
+          </MenuItem>
+          <MenuItem onClick={() => addProjectFromTemplate()}>
+            <Network className="text-amber-500" />
+            Project Template
+          </MenuItem>
+          {canJoinLab && (
+            <MenuItem onClick={() => setJoinOpen(true)}>
+              <CloudCog className="text-emerald-500" />
+              Join a Lab
+            </MenuItem>
+          )}
+        </MenuContent>
+      </Menu>
 
       <Button
         variant="ghost"
