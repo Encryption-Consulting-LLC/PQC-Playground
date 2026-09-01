@@ -260,6 +260,46 @@ export const TEMPLATE_CATALOG: TemplateDef[] = [
     platform: "linux",
     category: "product",
     cloneBase: "ub-24.04-base",
+    // Exactly the four names the vendor installer prompts for. Everything else
+    // it writes is the same on every deployment, and the two certificate paths
+    // it also asks for are backend-controlled — the certificate is generated
+    // into the product tree during provisioning rather than supplied.
+    //
+    // The defaults describe the lab's own domain, so wiring the node to a
+    // domain controller and pressing Deploy yields working names with nothing
+    // typed. Only names that fall inside the domain controller's zone get DNS
+    // records; pointing these somewhere else still installs, it just leaves the
+    // lab's DNS out of it.
+    configFields: [
+      {
+        key: "frontendHost",
+        label: "Dashboard host name",
+        type: "text",
+        default: "certsecure.encon.pki",
+        placeholder: "certsecure.encon.pki",
+      },
+      {
+        key: "backendHost",
+        label: "API host name",
+        type: "text",
+        default: "certsecure-api.encon.pki",
+        placeholder: "certsecure-api.encon.pki",
+      },
+      {
+        key: "keycloakHost",
+        label: "Keycloak host name",
+        type: "text",
+        default: "kc.encon.pki",
+        placeholder: "kc.encon.pki",
+      },
+      {
+        key: "keycloakRealm",
+        label: "Keycloak realm",
+        type: "text",
+        default: "encon.pki",
+        placeholder: "encon.pki",
+      },
+    ],
   },
   {
     id: "cbom",

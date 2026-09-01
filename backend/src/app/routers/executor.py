@@ -108,6 +108,14 @@ _COMMAND_CAPABILITIES: dict[str, Capability] = {
     "cert.dspublish": Capability.VM_PROVISION,
     "template.grant_access": Capability.VM_PROVISION,
     "powershell.exec_arbitrary": Capability.VM_EXEC_ARBITRARY,
+    # Linux product provisioning. Registered on every platform in the agent (the
+    # catalog is one contract), dispatched only to a Linux product guest.
+    "apt.refresh": Capability.VM_PROVISION,
+    "certsecure.write_hosts": Capability.VM_PROVISION,
+    "certsecure.make_cert": Capability.VM_PROVISION,
+    "certsecure.install": Capability.VM_PROVISION,
+    "certsecure.harden": Capability.VM_PROVISION,
+    "certsecure.verify": Capability.VM_READ,
 }
 
 

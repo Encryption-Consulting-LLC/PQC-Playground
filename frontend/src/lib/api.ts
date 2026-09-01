@@ -503,6 +503,10 @@ export type TopologyRole =
   | "webServer"
   | "client"
   | "standalone"
+  // One role for all three Linux product appliances: the topology's questions —
+  // what may this connect to, what does it depend on — have the same answer for
+  // each, and *which* product it is stays the createVm op's `template`.
+  | "product"
 
 export interface TopologyPayload {
   version: 1
@@ -515,7 +519,11 @@ export interface TopologyPayload {
   }>
   edges: Array<{
     id: string
-    kind: "domainMembership" | "caParent" | "caPublication"
+    kind:
+      | "domainMembership"
+      | "caParent"
+      | "caPublication"
+      | "productIntegration"
     source: string
     target: string
     state: "planned" | "realized"
@@ -525,6 +533,7 @@ export interface TopologyPayload {
       | "domainBoundary"
       | "webHost"
       | "probeCertificate"
+      | "productIntegration"
     >
   }>
   dnsRecords: Array<{

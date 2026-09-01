@@ -14,14 +14,19 @@ step can reference another node's real guest-namespaced hostname
 
 import json
 from pathlib import PureWindowsPath
+from typing import TYPE_CHECKING
 from urllib.parse import quote
 
+from app.core.firstboot import platform_for_template
 from app.core.sequences.health import (
     ML_DSA_87_SIGNATURE_OID,
     aggregate_lab_health,
 )
 from app.core.sequences.context import ContextError
 from app.core.sequences.model import DnsRecordContext, RunContext, Step, StepRuntime
+
+if TYPE_CHECKING:  # pragma: no cover - import cycle: topology imports nothing here
+    from app.core.topology import ProductIntegration
 
 #: Context alias keys (mirror app.core.sequences.context).
 PRIMARY = "primary"
@@ -42,6 +47,16 @@ _CSR = "C:\\Transfer\\IssuingCA.req"
 _ISSUING_CRT = "C:\\Transfer\\IssuingCA.crt"
 #: The web host's served CertEnroll dir (the file.read/write allowlist entry).
 _WEB_CERTENROLL = "C:\\CertEnroll"
+#: Where the product's own certificate lands on each Windows node before it is
+#: added to that machine's root store. On ``C:\Transfer\`` like every other
+#: relayed artifact, so it needs no new ``file.write`` allowlist entry.
+_PRODUCT_CRT = "C:\\Transfer\\product-tls.crt"
+
+#: The product tree on the Linux guest — fixed, and the same constant the agent
+#: and ``core.firstboot`` are written against.
+_PRODUCT_DIR = "/opt/certsecure-manager"
+_PRODUCT_CERT_PATH = f"{_PRODUCT_DIR}/conf/cert.pem"
+_PRODUCT_KEY_PATH = f"{_PRODUCT_DIR}/conf/key.pem"
 
 # Artifact relay keys (plan_runs.artifacts).
 _A_ROOT_CRT = "root_crt"
@@ -53,6 +68,9 @@ _A_ROOT_CRL_FILE = "root_crl_filename"
 _A_ISSUING_CERT_FILE = "issuing_cert_filename"
 _A_ISSUING_CRL_FILE = "issuing_crl_filename"
 _A_ISSUING_DELTA_CRL_FILE = "issuing_delta_crl_filename"
+#: The product's self-signed TLS certificate (DER), relayed from the Linux guest
+#: to every Windows node that must trust it.
+_A_PRODUCT_CRT = "product_crt"
 
 # Service-specific transient retry windows. Side-effecting commands carrying
 # these schedules are required to verify desired state before changing it.
@@ -88,6 +106,17 @@ _OCSP_RETRY = (10, 20, 40, 60, 90)
 #: own `ocspRefreshMinutes` (15) retry, because waiting that out would add a
 #: quarter hour to a deployment to improve a warning nobody is blocked on.
 _OCSP_SETTLE_S = 180
+
+#: The vendor installer's own measured total on a cold image is 595s — 287 of
+#: those building OpenSSL 3.5 from source. Sized against that first run rather
+#: than the (cheap, idempotent) re-run, then given the same order of headroom
+#: the Windows role-change tier carries, because a dispatch timeout is the one
+#: failure a retry schedule deliberately cannot rescue.
+_PRODUCT_INSTALL_S = 2700
+#: How long the health probe waits for Keycloak to start answering after the
+#: installer brings it up. Advisory: a slow Keycloak ships a warning, never a
+#: failed deployment (see ``Step.settle_predicate``).
+_KEYCLOAK_SETTLE_S = 300
 
 _CA_INSTALL_S = 2700
 _ROLE_CHANGE_S = 2700
@@ -157,7 +186,12 @@ def _materialize_dns_records(
         if record.kind == "A":
             if not subject.ip:
                 raise ValueError(f"A resource '{record.id}' has no allocated address")
-            name, value = subject.hostname, subject.ip
+            # ``name`` is the label inside the zone. Defaulting to the subject's
+            # own guest hostname is what every PKI component wants; a product
+            # appliance instead publishes the service names the operator
+            # configured (``certsecure``, ``certsecure-api``, ``kc``), several
+            # of which point at the same address, so it sets one explicitly.
+            name, value = record.name or subject.hostname, subject.ip
         elif record.kind == "PTR":
             if not subject.ip:
                 raise ValueError(f"PTR resource '{record.id}' has no allocated address")
@@ -500,12 +534,231 @@ def _domain_controller_provision(*, include_dns: bool = False) -> list[Step]:
     return steps
 
 
+def _product_step_slug(node_id: str) -> str:
+    """A step-id-safe form of a canvas node id.
+
+    Step ids are interpolated straight into dispatch job keys, and the engine
+    reads ``.verify.`` / ``.settle.`` *markers* out of those keys to decide
+    which manifest row a frame belongs to — so a dot in a node id would make a
+    trust-push step's progress land on a row that does not exist.
+    """
+    return "".join(c if c.isalnum() else "-" for c in node_id).strip("-")
+
+
+def _certsecure_provision(
+    *,
+    node_id: str,
+    trust_node_ids: tuple[str, ...] = (),
+    dns_server_id: str | None = None,
+) -> list[Step]:
+    """CertSecure Manager (createVm tail).
+
+    Refresh apt, resolve the lab locally, generate the service's TLS
+    certificate, run the vendor installer, distribute that certificate's trust,
+    register the product's names in the lab's DNS zone, then repair the file
+    modes the installer leaves open and confirm the service answers.
+
+    Two decisions here are worth stating because both look like omissions:
+
+    * **The certificate is self-signed, not CA-issued.** The lab's root and
+      issuing CAs are ML-DSA-87 for signature *and* public key, and no shipping
+      browser validates ML-DSA in a TLS chain — an issued certificate would
+      produce a service nobody could open. (The issuing CA also publishes only
+      ``Workstation`` and ``OCSPResponseSigning``, so there is no web-server
+      template to enrol against either.) Trust comes from pushing the
+      certificate into each Windows node's machine root store instead, which is
+      what steps ``trust-*`` do and what the deployment is verified on.
+    * **``apt.refresh`` comes first and is not optional.** The golden image's
+      package lists are stale enough that every ``gcc-13`` / ``dpkg-dev`` URL
+      404s, and the installer dies four seconds in with what reads as a broken
+      mirror rather than a stale index.
+    """
+
+    def hosts_params(rt: StepRuntime) -> dict[str, str]:
+        cfg = rt.node.template_config
+        own = [
+            cfg.get("frontendHost", ""),
+            cfg.get("backendHost", ""),
+            cfg.get("keycloakHost", ""),
+        ]
+        lines = []
+        if rt.node.ip:
+            names = [name for name in own if name]
+            if names:
+                lines.append(" ".join([rt.node.ip, *names]))
+        # The lab's own machines, so the product resolves them during the
+        # install — before its A records exist and before anything has verified
+        # the lab's DNS end to end.
+        for other_id in trust_node_ids:
+            other = rt.ctx.nodes.get(other_id)
+            if other is None or not other.ip:
+                continue
+            names = [other.hostname]
+            if rt.ctx.domain_name:
+                names.append(_fqdn(rt.ctx, other.hostname))
+            lines.append(" ".join([other.ip, *names]))
+        return {"entries": "\n".join(lines)}
+
+    def cert_params(rt: StepRuntime) -> dict[str, str]:
+        cfg = rt.node.template_config
+        names = [
+            name
+            for name in (
+                cfg.get("frontendHost", ""),
+                cfg.get("backendHost", ""),
+                cfg.get("keycloakHost", ""),
+            )
+            if name
+        ]
+        return {
+            "names": ",".join(names),
+            "ip": rt.node.ip or "",
+            "certPath": _PRODUCT_CERT_PATH,
+            "keyPath": _PRODUCT_KEY_PATH,
+        }
+
+    def install_params(rt: StepRuntime) -> dict[str, str]:
+        cfg = rt.node.template_config
+        return {
+            "frontendHost": cfg.get("frontendHost", ""),
+            "backendHost": cfg.get("backendHost", ""),
+            "keycloakHost": cfg.get("keycloakHost", ""),
+            "keycloakRealm": cfg.get("keycloakRealm", ""),
+            "certPath": _PRODUCT_CERT_PATH,
+            "keyPath": _PRODUCT_KEY_PATH,
+        }
+
+    def health_params(rt: StepRuntime) -> dict[str, str]:
+        cfg = rt.node.template_config
+        params = {"frontendUrl": f"https://{cfg.get('frontendHost', '')}/"}
+        keycloak = cfg.get("keycloakHost", "")
+        if keycloak:
+            params["keycloakUrl"] = f"https://{keycloak}/"
+        return params
+
+    steps: list[Step] = [
+        Step(
+            id="apt-refresh",
+            command="apt.refresh",
+            target=PRIMARY,
+            retry_delays_s=_DNS_RETRY,
+            timeout_s=_SERVICE_OP_S,
+        ),
+        Step(
+            id="product-hosts",
+            command="certsecure.write_hosts",
+            target=PRIMARY,
+            params=hosts_params,
+        ),
+        Step(
+            id="product-cert",
+            command="certsecure.make_cert",
+            target=PRIMARY,
+            params=cert_params,
+            produces=(_A_PRODUCT_CRT,),
+        ),
+        Step(
+            id="product-install",
+            command="certsecure.install",
+            target=PRIMARY,
+            params=install_params,
+            timeout_s=_PRODUCT_INSTALL_S,
+            # The install is idempotent phase by phase, but a *timed-out*
+            # dispatch is never redispatched by the engine (giving up on the
+            # wait does not stop the script on the guest), so this schedule only
+            # ever rescues a guest-side failure — a transient package mirror,
+            # most likely, which is exactly what it is sized for.
+            retry_delays_s=_FEATURE_RETRY,
+            verify=Step(
+                id="product-verify",
+                command="certsecure.verify",
+                target=PRIMARY,
+                params=health_params,
+            ),
+            verify_predicate=lambda r: r.get("frontendOk") is True,
+            verify_window_s=600,
+        ),
+    ]
+
+    # Trust distribution: the DER the installer's certificate step produced,
+    # written to each Windows node's relay dir and added to its machine root
+    # store. `cert.addstore` takes a path, not content, which is why each target
+    # is two steps rather than one — the same shape the root CA's handoff uses.
+    for other_id in trust_node_ids:
+        slug = _product_step_slug(other_id)
+        steps.extend(
+            [
+                Step(
+                    id=f"trust-write-{slug}",
+                    command="file.write",
+                    target=other_id,
+                    params={"path": _PRODUCT_CRT},
+                    consumes=(_A_PRODUCT_CRT,),
+                ),
+                Step(
+                    id=f"trust-add-{slug}",
+                    command="cert.addstore",
+                    target=other_id,
+                    params={"store": "root", "path": _PRODUCT_CRT, "kind": "cert"},
+                ),
+            ]
+        )
+
+    if dns_server_id is not None:
+
+        def records(rt: StepRuntime) -> tuple[DnsRecordContext, ...]:
+            return _records_for(rt.ctx, node_id, ("A",))
+
+        steps.append(
+            Step(
+                id="product-dns",
+                command="dns.apply_resources",
+                target=dns_server_id,
+                params=lambda rt: _dns_params(rt.ctx, records(rt)),
+                retry_delays_s=_DNS_RETRY,
+            )
+        )
+
+    steps.extend(
+        [
+            Step(
+                id="product-harden",
+                command="certsecure.harden",
+                target=PRIMARY,
+            ),
+            # Advisory, not a gate: Keycloak takes a while to finish coming up
+            # after `kc.sh build`, and a lab whose dashboard answers should ship
+            # with a warning rather than fail because its identity provider was
+            # slow. `settle` re-dispatches this read-only probe until its own
+            # result satisfies the predicate and treats the window closing as a
+            # non-event — see ``Step.settle_predicate``.
+            Step(
+                id="product-health",
+                command="certsecure.verify",
+                target=PRIMARY,
+                params=health_params,
+                settle_predicate=lambda r: r.get("keycloakOk") is True,
+                settle_window_s=_KEYCLOAK_SETTLE_S,
+            ),
+        ]
+    )
+    return steps
+
+
 #: createVm provision tails by template id. A template absent here provisions
 #: nothing on first boot (its role is driven later by plan ops) — a member
 #: server does its work on domain join (slice 10).
 _PROVISION_SEQUENCES = {
     "domainController": _domain_controller_provision,
     "certificateAuthority": _root_ca_provision,
+}
+
+#: The Linux product tails, kept in their own map because they are selected
+#: *before* the settle reboot rather than after it, and because they are the
+#: only builders that need the plan's topology (their trust push and DNS
+#: registration both name other nodes).
+_PRODUCT_PROVISION_SEQUENCES = {
+    "certsecure": _certsecure_provision,
 }
 
 
@@ -540,20 +793,45 @@ def provision_steps(
     ca_type: str | None = None,
     node_id: str | None = None,
     dns_records: tuple[DnsRecordContext, ...] = (),
+    integration: "ProductIntegration | None" = None,
 ) -> list[Step]:
     """The createVm provision tail for ``template``.
 
-    Always opens with ``settle-reboot`` (see :func:`_settle_reboot_step`) —
-    *before* the early returns below, because the templates whose role tail is
-    empty here still install a Windows feature later in the plan: the issuing
-    CA's ``install-issuing`` in caConnect and the web server's ``iis-web`` in
-    webServerCert. Agentless guests never reach this — ``_run_provision_op``
-    short-circuits on a Linux product template or a missing agent vm id.
+    A Windows template always opens with ``settle-reboot`` (see
+    :func:`_settle_reboot_step`) — *before* the early returns below, because the
+    templates whose role tail is empty here still install a Windows feature
+    later in the plan: the issuing CA's ``install-issuing`` in caConnect and the
+    web server's ``iis-web`` in webServerCert. Agentless guests never reach this
+    — ``_run_provision_op`` short-circuits on a missing agent vm id.
+
+    A **Linux product template does not**, and that is the non-obvious half of
+    this branch: the settle reboot exists to consume ``ws-2025-base``'s
+    unconsumed CBS reboot mark, which is a fact about one Windows golden image
+    and has no counterpart on Ubuntu. Taking it anyway would add a reboot plus a
+    full reconnect wait to every product deployment to fix nothing.
 
     ``ca_type`` skips provisioning an *issuing* CA on first boot — it can't
     stand up until the caConnect handshake, so its createVm tail is just the
     settle reboot and the work happens in that op.
+
+    ``integration`` is the product's resolved ``productIntegration`` edge
+    (:func:`app.core.topology.product_integration`). Absent, a product still
+    installs — it simply registers no DNS records and pushes its certificate
+    nowhere, which is what an appliance nobody wired to a domain should do.
     """
+    if platform_for_template(template) == "linux":
+        # Keyed on the *platform*, not on having a sequence: a product with no
+        # installer wired yet (CBOM Secure, CodeSign Secure) must skip the
+        # Windows settle reboot too, and keying on the sequence map would have
+        # silently handed it one.
+        builder = _PRODUCT_PROVISION_SEQUENCES.get(template)
+        if builder is None or node_id is None:
+            return []
+        return builder(
+            node_id=node_id,
+            trust_node_ids=integration.trust_node_ids if integration else (),
+            dns_server_id=integration.dc_id if integration else None,
+        )
     steps = [_settle_reboot_step()]
     if template == "certificateAuthority" and ca_type == "Issuing":
         return steps

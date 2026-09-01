@@ -22,12 +22,22 @@ class TopologyRole(str, Enum):
     web_server = "webServer"
     client = "client"
     standalone = "standalone"
+    #: A Linux product appliance (CertSecure Manager, CBOM Secure, CodeSign
+    #: Secure). One role for all three, because the topology's questions —
+    #: what may this connect to, what does it depend on — have the same answer
+    #: for each; *which* product it is stays the createVm op's ``template``.
+    product = "product"
 
 
 class TopologyEdgeKind(str, Enum):
     domain_membership = "domainMembership"
     ca_parent = "caParent"
     ca_publication = "caPublication"
+    #: A product appliance wired to a domain controller: "register my names in
+    #: your zone and have your domain trust my certificate". Deliberately not a
+    #: ``domain_membership``: nothing joins a domain here, no computer account
+    #: is created, and the product stays a Linux box outside the forest.
+    product_integration = "productIntegration"
 
 
 class TopologyPortKind(str, Enum):
@@ -36,6 +46,7 @@ class TopologyPortKind(str, Enum):
     domain_boundary = "domainBoundary"
     web_host = "webHost"
     probe_certificate = "probeCertificate"
+    product_integration = "productIntegration"
 
 
 class TopologyResourceState(str, Enum):
@@ -51,6 +62,7 @@ _PORTS_BY_EDGE_KIND = {
         TopologyPortKind.web_host,
         TopologyPortKind.probe_certificate,
     ),
+    TopologyEdgeKind.product_integration: (TopologyPortKind.product_integration,),
 }
 
 
@@ -196,6 +208,11 @@ _PROVISION_DURATION_SECONDS = {
     TopologyRole.web_server: 300,
     TopologyRole.client: 300,
     TopologyRole.standalone: 300,
+    # The CertSecure installer's own measured total is 595s on a cold image;
+    # the rest of the sequence (hosts, certificate, trust push, DNS) is small
+    # next to it. Every expensive phase is idempotent, so a re-run is far
+    # cheaper than this — the estimate is sized for the case that matters.
+    TopologyRole.product: 900,
 }
 
 _KIND_RANK = {
@@ -214,6 +231,10 @@ _ROLE_RANK = {
     TopologyRole.web_server: 3,
     TopologyRole.client: 4,
     TopologyRole.standalone: 5,
+    # Last, and not only for tidiness: a product's provision op depends on every
+    # Windows node in its domain being provisioned, so it can never be scheduled
+    # before them and displaying it earlier would misdescribe the plan.
+    TopologyRole.product: 6,
 }
 
 
@@ -368,6 +389,7 @@ def validate_topology(topology: TopologyDocument) -> None:
     memberships: dict[str, list[TopologyEdge]] = defaultdict(list)
     parents: dict[str, list[TopologyEdge]] = defaultdict(list)
     publications: dict[str, list[TopologyEdge]] = defaultdict(list)
+    integrations: dict[str, list[TopologyEdge]] = defaultdict(list)
     ca_adjacency: dict[str, list[str]] = defaultdict(list)
 
     for edge in valid_edges:
@@ -417,6 +439,32 @@ def validate_topology(topology: TopologyDocument) -> None:
                         edge_ids=[edge.id],
                     )
                 )
+        elif edge.kind is TopologyEdgeKind.product_integration:
+            integrations[edge.source].append(edge)
+            if source.role is not TopologyRole.product:
+                diagnostics.append(
+                    TopologyDiagnostic(
+                        code="invalid-product-integration-source",
+                        message=(
+                            f"{source.name} is not a product appliance and cannot "
+                            "integrate with a domain."
+                        ),
+                        node_ids=[source.id],
+                        edge_ids=[edge.id],
+                    )
+                )
+            if target.role is not TopologyRole.domain_controller:
+                diagnostics.append(
+                    TopologyDiagnostic(
+                        code="invalid-product-integration-target",
+                        message=(
+                            f"{source.name} integrates with {target.name}, but a "
+                            "product integration must target a domain controller."
+                        ),
+                        node_ids=[source.id, target.id],
+                        edge_ids=[edge.id],
+                    )
+                )
         elif edge.kind is TopologyEdgeKind.ca_publication:
             publications[edge.source].append(edge)
             if (
@@ -434,6 +482,20 @@ def validate_topology(topology: TopologyDocument) -> None:
                         edge_ids=[edge.id],
                     )
                 )
+
+    for node_id, edges in integrations.items():
+        if len(edges) > 1:
+            diagnostics.append(
+                TopologyDiagnostic(
+                    code="multiple-product-integrations",
+                    message=(
+                        f"{nodes[node_id].name} integrates with more than one "
+                        "domain controller."
+                    ),
+                    node_ids=[node_id],
+                    edge_ids=[edge.id for edge in edges],
+                )
+            )
 
     for node_id, edges in memberships.items():
         if len(edges) > 1:
@@ -825,6 +887,67 @@ def _synthesize_provision(create_op: CompilableOp) -> Any:
     return op
 
 
+@dataclass(frozen=True)
+class ProductIntegration:
+    """What a ``productIntegration`` edge resolves to for one product node.
+
+    Pure, and derived from the topology alone, because both callers must agree
+    exactly: the execution manifest builds the deploy preview from it and the
+    Celery worker builds the real sequence from it. A step list that differed
+    between the two would renumber the panel's rows mid-run.
+    """
+
+    #: The domain controller the product registers its names with.
+    dc_id: str
+    #: Every Windows node that must trust the product's certificate — the DC
+    #: itself plus its domain members. A member is included whether or not it
+    #: is a CA or web server: the point is that a browser on any lab machine
+    #: opens the product without a certificate warning.
+    trust_node_ids: tuple[str, ...]
+
+
+def product_integration(
+    topology: TopologyDocument, node_id: str
+) -> ProductIntegration | None:
+    """Resolve ``node_id``'s product integration, or ``None`` when it has none.
+
+    A product with no integration edge is a perfectly valid drawing — it is a
+    Linux appliance nobody wired to a domain — and it simply gets no DNS
+    records and no trust push.
+    """
+    dc_id = next(
+        (
+            edge.target
+            for edge in topology.edges
+            if edge.kind is TopologyEdgeKind.product_integration
+            and edge.source == node_id
+        ),
+        None,
+    )
+    if dc_id is None:
+        return None
+    windows_roles = {
+        TopologyRole.domain_controller,
+        TopologyRole.root_ca,
+        TopologyRole.issuing_ca,
+        TopologyRole.web_server,
+        TopologyRole.client,
+        TopologyRole.standalone,
+    }
+    by_id = {node.id: node for node in topology.nodes}
+    members = [
+        edge.source
+        for edge in topology.edges
+        if edge.kind is TopologyEdgeKind.domain_membership and edge.target == dc_id
+    ]
+    trust = [
+        candidate
+        for candidate in [dc_id, *sorted(members)]
+        if candidate in by_id and by_id[candidate].role in windows_roles
+    ]
+    return ProductIntegration(dc_id=dc_id, trust_node_ids=tuple(trust))
+
+
 def compile_plan(
     topology: TopologyDocument, operations: Sequence[CompilableOp]
 ) -> CompiledPlan:
@@ -866,6 +989,15 @@ def compile_plan(
             key = ("domainJoin", edge.source, edge.target)
         elif edge.kind is TopologyEdgeKind.ca_parent:
             key = ("caConnect", edge.target, edge.source)
+        elif edge.kind is TopologyEdgeKind.product_integration:
+            # No operation of its own, on purpose: the DNS registration and the
+            # trust push this relationship stands for run *inside* the product's
+            # own provision op, where the installer that generated the
+            # certificate and chose the names already is. Registering a resource
+            # state here would demand an operation nothing ever stages and fail
+            # every plan with `missing-operation`; what the edge does contribute
+            # is the dependency below.
+            continue
         else:
             key = ("webServerCert", edge.source, edge.target)
         resource_states[key] = edge.state
@@ -931,10 +1063,14 @@ def compile_plan(
                 TopologyRole.issuing_ca: ("certificateAuthority", "Issuing"),
                 TopologyRole.web_server: ("webServer", None),
                 TopologyRole.client: ("client", None),
+                # A pre-`product`-role canvas emitted every Linux product as
+                # `standalone`; still accepted so a topology saved before that
+                # role existed compiles unchanged.
                 TopologyRole.standalone: (
                     {"standalone", "certsecure", "cbom", "codesign"},
                     None,
                 ),
+                TopologyRole.product: ({"certsecure", "cbom", "codesign"}, None),
             }[nodes[op.target].role]
             allowed = expected_templates[0]
             template_matches = (
@@ -1050,6 +1186,14 @@ def compile_plan(
     for edge in topology.edges:
         if edge.kind is TopologyEdgeKind.ca_publication:
             publications_by_ca[edge.source].append(edge.target)
+    integration_dc_by_product = {
+        edge.source: edge.target
+        for edge in topology.edges
+        if edge.kind is TopologyEdgeKind.product_integration
+    }
+    members_by_dc: dict[str, list[str]] = defaultdict(list)
+    for member_id, dc_id in membership_by_member.items():
+        members_by_dc[dc_id].append(member_id)
 
     def require(op_id: str, candidate: str | None) -> None:
         if candidate is not None and candidate != op_id:
@@ -1068,6 +1212,18 @@ def compile_plan(
             continue
         if kind == "provision":
             require(op.id, creates.get(op.target))
+            dc_id = integration_dc_by_product.get(op.target)
+            if dc_id is not None:
+                # The product's sequence writes A records at this DC and pushes
+                # its certificate into the machine root store of every Windows
+                # node in the domain — so all of them must already be standing,
+                # with a live agent, before it runs. That makes an integrated
+                # product a leaf of its domain's subgraph, which is also where
+                # it belongs: it is the last thing in the lab to be stood up and
+                # the first thing anyone opens.
+                require(op.id, provisioned(dc_id))
+                for member_id in members_by_dc[dc_id]:
+                    require(op.id, provisioned(member_id))
             continue
         require(op.id, provisioned(op.target))
         if op.secondary:

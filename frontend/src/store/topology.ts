@@ -37,6 +37,9 @@ import {
   canConnectServiceSockets,
   connectionPorts,
   domainJoinEdge,
+  domainRelationshipEdge,
+  domainRelationshipKind,
+  productIntegrationEdge,
   domainLabel,
   edgeStyle,
   edgeServiceSocket,
@@ -47,6 +50,7 @@ import {
   serviceSocketHandleId,
   serviceSocketEdgeType,
 } from "@/lib/topology"
+import type { DomainRelationshipKind } from "@/lib/topology"
 import { OP_KIND, findStagedOp } from "@/lib/staging"
 import { useAuthStore } from "@/store/auth"
 import { opsReferencingNode, useStagingStore } from "@/store/staging"
@@ -149,6 +153,14 @@ export interface DomainSyncChange {
   nodeName: string
   dcId: string | null
   domainName: string | null
+  /**
+   * Which relationship the drag proposes. A Windows machine joins the forest;
+   * a Linux product appliance stays outside it and gets DNS registration plus
+   * machine-root trust. Carried on the change rather than re-derived where it
+   * is applied, so the dialog the user reads and the edge that gets written
+   * cannot disagree about what was confirmed.
+   */
+  kind: DomainRelationshipKind
 }
 
 // ---------------------------------------------------------------------------
@@ -462,13 +474,17 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
           SERVICE_SOCKET.publication)
         : null
 
-    if (type === EDGE_TYPE.domainJoin) {
+    if (
+      type === EDGE_TYPE.domainJoin ||
+      type === EDGE_TYPE.productIntegration
+    ) {
       get().applyDomainChanges([
         {
           nodeId: sourceNode.id,
           nodeName: sourceNode.data.name,
           dcId: targetNode.id,
           domainName: domainLabel(targetNode),
+          kind: domainRelationshipKind(sourceNode),
         },
       ])
       return null
@@ -578,10 +594,7 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
 
       const dc = findDomainForNode(node, nodes, edges)
       const targetDcId = dc?.id ?? null
-      const currentEdge = edges.find(
-        (e) =>
-          e.source === node.id && e.data?.edgeType === EDGE_TYPE.domainJoin,
-      )
+      const currentEdge = domainRelationshipEdge(node, edges)
       if ((currentEdge?.target ?? null) === targetDcId) continue
 
       changes.push({
@@ -589,6 +602,7 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
         nodeName: node.data.name,
         dcId: targetDcId,
         domainName: dc ? domainLabel(dc) : null,
+        kind: domainRelationshipKind(node),
       })
     }
 
@@ -599,6 +613,27 @@ export const useTopologyStore = create<TopologyState>()((set, get) => ({
     if (changes.length === 0) return
     if (useStagingStore.getState().deploying) return
     for (const c of changes) {
+      if (c.kind === "integration") {
+        // No staged op, deliberately. What this relationship stands for — the
+        // A records at the DC and the certificate in every domain machine's
+        // root store — runs inside the product's own backend-synthesized
+        // provision op, next to the installer that generated that certificate
+        // and chose those names. There is nothing left for a client op to do,
+        // and staging one would demand a backend op kind that does nothing.
+        set((s) => ({
+          edges: [
+            ...s.edges.filter(
+              (e) =>
+                !(
+                  e.source === c.nodeId &&
+                  e.data?.edgeType === EDGE_TYPE.productIntegration
+                ),
+            ),
+            ...(c.dcId ? [productIntegrationEdge(c.nodeId, c.dcId, true)] : []),
+          ],
+        }))
+        continue
+      }
       // Capture what's being replaced before mutating — `domainLeave`'s
       // undo needs the DC it left to re-add the exact same edge.
       const prevEdge = get().edges.find(

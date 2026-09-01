@@ -283,7 +283,8 @@ def preflight_infrastructure(
                 role=machine.role,
                 ok=qualification_ok,
                 detail=(
-                    "Linux product setup is stubbed; Windows PKI qualification is not required."
+                    "Linux product image qualification is not gated; the Windows PKI "
+                    "canaries it records do not apply."
                     if linux_product
                     else "Image qualification matches this revision and required canaries."
                     if qualification_ok

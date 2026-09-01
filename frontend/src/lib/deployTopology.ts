@@ -11,6 +11,7 @@ import {
   isDeployed,
   webServiceEdges,
 } from "@/lib/topology"
+import { templatePlatform } from "@/constants/templates"
 import type { MachineData } from "@/store/topology"
 
 function topologyRole(data: MachineData): TopologyRole {
@@ -24,8 +25,37 @@ function topologyRole(data: MachineData): TopologyRole {
     case "client":
       return "client"
     default:
-      return "standalone"
+      // One role for all three Linux product appliances. They used to compile
+      // as `standalone`, which the backend still accepts so a topology saved
+      // before this role existed keeps compiling; a fresh one says what it is,
+      // which is what lets a product integration be validated at all.
+      return templatePlatform(data.typeId) === "linux"
+        ? "product"
+        : "standalone"
   }
+}
+
+/**
+ * The label a product's configured FQDN takes inside `zone`, or null when the
+ * name lives somewhere else entirely.
+ *
+ * An operator is free to point CertSecure at `certsecure.example.com` while the
+ * lab domain is `encon.pki`; the product still installs under that name, but the
+ * lab's DNS is not authoritative for it and inventing a record there would be a
+ * lie. So the record is simply not planned — which is also why this returns null
+ * rather than falling back to the bare first label.
+ */
+function labelWithinZone(
+  fqdn: string | undefined,
+  zone: string,
+): string | null {
+  const name = fqdn?.trim().replace(/\.+$/, "")
+  if (!name) return null
+  const suffix = `.${zone}`
+  if (!name.toLocaleLowerCase().endsWith(suffix.toLocaleLowerCase()))
+    return null
+  const label = name.slice(0, -suffix.length)
+  return label.length > 0 && !label.includes(".") ? label : null
 }
 
 export function buildDeployTopology(
@@ -40,6 +70,11 @@ export function buildDeployTopology(
   const memberships = new Map(
     edges
       .filter((edge) => edge.data?.edgeType === EDGE_TYPE.domainJoin)
+      .map((edge) => [edge.source, edge.target]),
+  )
+  const integrations = new Map(
+    edges
+      .filter((edge) => edge.data?.edgeType === EDGE_TYPE.productIntegration)
       .map((edge) => [edge.source, edge.target]),
   )
   const dnsRecords: TopologyPayload["dnsRecords"] = []
@@ -96,6 +131,30 @@ export function buildDeployTopology(
     }
   }
 
+  // A product publishes the three service names the installer was configured
+  // with, all pointing at its single address — so each record carries its own
+  // label rather than taking the subject's guest hostname the way a PKI
+  // component's A record does.
+  for (const node of nodes) {
+    if (topologyRole(node.data) !== "product") continue
+    const dcId = integrations.get(node.id)
+    const dc = dcId ? domainControllers.get(dcId) : undefined
+    const zone = dc?.data.config?.domainName?.trim()
+    if (!dcId || !zone) continue
+    for (const field of ["frontendHost", "backendHost", "keycloakHost"]) {
+      const label = labelWithinZone(node.data.config?.[field], zone)
+      if (!label) continue
+      dnsRecords.push({
+        id: `dns:a:${dcId}:${node.id}:${label}`,
+        kind: "A",
+        server: dcId,
+        subject: node.id,
+        zone,
+        name: label,
+      })
+    }
+  }
+
   for (const pair of completeServicePairs) {
     const dcId = memberships.get(pair.source)
     const dc = dcId ? domainControllers.get(dcId) : undefined
@@ -126,12 +185,18 @@ export function buildDeployTopology(
     edges: [
       ...edges.flatMap((edge) => {
         const edgeType = edge.data?.edgeType as EdgeType | undefined
-        const kind: "domainMembership" | "caParent" | null =
+        const kind:
+          | "domainMembership"
+          | "caParent"
+          | "productIntegration"
+          | null =
           edgeType === EDGE_TYPE.domainJoin
             ? "domainMembership"
             : edgeType === EDGE_TYPE.caHierarchy
               ? "caParent"
-              : null
+              : edgeType === EDGE_TYPE.productIntegration
+                ? "productIntegration"
+                : null
         return kind && edgeType
           ? [
               {

@@ -16,6 +16,17 @@ runs as a visible executor step instead of blocking the connection.
 ``role_scripts_for`` remains the hook for a genuinely firstboot-only script (one
 that must run *before* the agent), but the shipping templates carry none.
 
+The **Linux product templates get an agent too**, from the same crate release
+built for ``x86_64-unknown-linux-musl`` — ``_AGENT_BINARY_NAMES`` and
+``_AGENT_INSTALL_SCRIPTS`` are keyed by guest platform for exactly that. They
+additionally carry the product's ~489 MB installation tree as a disc payload
+plus a ``45-`` step that verifies its digest and extracts it. That step
+deliberately **stages without installing**: firstboot runs before the agent
+exists, so a failure there is invisible until a phone-home that never comes,
+whereas a copy and an extract are the two things that cannot meaningfully fail
+on a disc that mounted. The 595-second vendor install is a sequence step with
+progress, retries and a visible error.
+
 ``admin_password`` renders a ``Set-LocalUser`` step for the built-in local
 ``Administrator``, and every Windows template gets one. It cannot be an executor
 step: ``Install-ADDSForest`` promotes the *local* Administrator into the new
@@ -37,9 +48,9 @@ its own, and a local account survives a domain join.
 
 Numbering fixes manifest (execution) order: ``10-`` hostname, ``20-`` network,
 ``30-`` Remote Desktop enablement (every Windows template), ``40-`` agent install
-(bundled path only), ``50-`` local Administrator password. isokit packs in the
-order received, so the list handed to it *is* the manifest order — the numeric
-names only document it.
+(bundled path only), ``45-`` product payload staging (product templates only),
+``50-`` local Administrator password. isokit packs in the order received, so the
+list handed to it *is* the manifest order — the numeric names only document it.
 
 ``30-enable-rdp.ps1`` is the other firstboot-only step, for the same reason the
 agent installer is one: it has to work on a VM whose agent never came up, which
@@ -77,19 +88,76 @@ from configgen import NetworkConfig
 from app.core.ippool import GuestNetwork
 from app.core.infrastructure import LINUX_PRODUCT_TEMPLATES
 
-#: On-disc name for the embedded agent binary — what the install script and the
-#: agent's Windows service expect (see ``assets/firstboot/_agent``).
-_AGENT_BINARY_NAME = "pki-executor.exe"
+_AGENT_DIR = Path(__file__).parent.parent / "assets" / "firstboot" / "_agent"
+
+#: On-disc name for the embedded agent binary, per guest platform — what the
+#: matching install script expects (see ``assets/firstboot/_agent``). Both are
+#: the same crate release built for two targets, so the *contents* differ but
+#: nothing else about the bundling does.
+_AGENT_BINARY_NAMES = {"windows": "pki-executor.exe", "linux": "pki-executor"}
 _AGENT_CONFIG_NAME = "executor.toml"
-#: Static install step appended when an agent is bundled. Lives under
-#: ``_agent`` (leading underscore → not a template dir, never role-globbed).
-_AGENT_INSTALL_SCRIPT = (
-    Path(__file__).parent.parent
-    / "assets"
-    / "firstboot"
-    / "_agent"
-    / "40-install-executor.ps1"
-)
+#: Static install step appended when an agent is bundled, per platform. Lives
+#: under ``_agent`` (leading underscore → not a template dir, never
+#: role-globbed).
+_AGENT_INSTALL_SCRIPTS = {
+    "windows": _AGENT_DIR / "40-install-executor.ps1",
+    "linux": _AGENT_DIR / "40-install-executor.sh",
+}
+#: Static product-payload staging step, packed after the agent installer on a
+#: product template. A template rendered with placeholders (the payload's name,
+#: its digest and the install directory) rather than parameterised at run time,
+#: because firstboot scripts take no arguments.
+_PAYLOAD_STAGE_SCRIPT = _AGENT_DIR / "45-stage-certsecure.sh"
+
+#: Where ``45-stage-certsecure.sh`` extracts the product tree. Fixed rather than
+#: configurable: the agent's ``certsecure.*`` commands and its ``file.*`` relay
+#: allowlist are both written against this exact path, so one side moving alone
+#: breaks the other silently.
+PRODUCT_INSTALL_DIR = "/opt/certsecure-manager"
+
+
+@dataclass(frozen=True)
+class ProductPayload:
+    """A product's installation tree, shipped on the firstboot ISO.
+
+    ``archive_path`` is the worker-host path to the ``.tar.gz``; ``sha256`` is
+    baked into the staging script so the guest verifies what it extracts. The
+    archive rides the disc as an isokit payload *file*, which is why this is
+    ~489 MB of ISO per product VM — the acknowledged cost of ISO delivery, whose
+    escape hatch is a golden image with the tree pre-staged (at which point the
+    staging step becomes a no-op and nothing else changes).
+    """
+
+    archive_path: Path
+    sha256: str
+
+
+#: The product archive's name *on the disc*. isokit names each entry after its
+#: path's filename, and the operator's downloaded archive is named whatever the
+#: vendor called it — "CertSecure Manager v3.3 - CLM Server.tar.gz" as shipped.
+#: Pinning the disc name keeps the staging script's baked-in filename
+#: independent of that, and keeps it inside Joliet's 64-character limit.
+PRODUCT_PAYLOAD_DISC_NAME = "product-payload.tar.gz"
+
+
+def _payload_on_disc(archive_path: Path, dest_dir: Path) -> Path:
+    """Present ``archive_path`` under :data:`PRODUCT_PAYLOAD_DISC_NAME`.
+
+    A symlink, not a copy: the archive is ~489 MB and isokit streams it by
+    path, so copying would double both the disk footprint and the build time of
+    every product clone to rename a file. Falls back to a copy on a filesystem
+    that refuses the link.
+    """
+    if archive_path.name == PRODUCT_PAYLOAD_DISC_NAME:
+        return archive_path
+    link = dest_dir / PRODUCT_PAYLOAD_DISC_NAME
+    try:
+        link.symlink_to(archive_path.resolve())
+    except OSError:
+        shutil.copy(archive_path, link)
+    return link
+
+
 #: Static Remote Desktop enablement step, packed for every Windows template.
 #: Non-overridable for the same reason the agent installer is: a PACK-mode file
 #: of the same name silently disabling remote desktop across a whole lab is not a
@@ -105,6 +173,22 @@ _RDP_ENABLE_SCRIPT = (
 #: Hardcoded on purpose: the inheritance is specific to the builtin, so pointing
 #: this at another local account would silently produce an unjoinable domain.
 LOCAL_ADMIN_ACCOUNT = "Administrator"
+
+#: Disc filenames a PACK-mode author can never supply. The agent installer is
+#: what makes the VM reachable at all, the RDP step is what makes it *visible*
+#: at all, the payload staging step is what puts the product on disk — and
+#: packing two entries under one disc filename is an isokit collision either
+#: way. Both agent installers are listed regardless of platform: the check runs
+#: over authored *names*, and a Windows author naming the Linux script (or the
+#: reverse) should be refused the same way rather than have it land as an extra
+#: script the runner then executes.
+_NON_OVERRIDABLE_SCRIPT_NAMES = frozenset(
+    {
+        *(path.name for path in _AGENT_INSTALL_SCRIPTS.values()),
+        _PAYLOAD_STAGE_SCRIPT.name,
+        _RDP_ENABLE_SCRIPT.name,
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -199,6 +283,7 @@ def build_firstboot_iso(
     agent: AgentBundle | None = None,
     admin_password: str = "",
     authored_scripts: list[tuple[str, str]] | None = None,
+    payload: ProductPayload | None = None,
 ) -> Path:
     """Render + pack the per-VM config ISO into ``dest_dir``; returns its path.
 
@@ -219,6 +304,13 @@ def build_firstboot_iso(
 
     Every Windows template also gets the static ``30-enable-rdp.ps1`` step, which
     is not overridable via ``authored_scripts``.
+
+    ``payload`` ships a product's installation tree as an additional disc file
+    plus a ``45-`` staging step that copies it out of the (transient) firstboot
+    files directory, verifies its digest and extracts it. It requires an
+    ``agent`` for the same reason the staging step does not install anything:
+    the install is a sequence step, and a disc that carried the tree with no
+    agent to act on it would produce a VM nobody can finish provisioning.
 
     ``authored_scripts`` is the operator's ``(name, content)`` set from the
     Config ISO panel, layered over the above: a name matching one of the
@@ -241,9 +333,9 @@ def build_firstboot_iso(
         linux_hostname_for(vm_name) if platform == "linux" else hostname_for(vm_name)
     )
 
-    if platform == "linux" and agent is not None:
+    if payload is not None and agent is None:
         raise ValueError(
-            "The Windows executor agent cannot be bundled into a Linux template."
+            "A product payload needs a bundled agent — nothing would install it."
         )
 
     # Authored files land on disc first so the renders below can check whether
@@ -256,7 +348,7 @@ def build_firstboot_iso(
         # packing two entries under one disc filename is an isokit collision.
         # Skipped before the write so no shadow copy is left in dest_dir to
         # confuse anyone reading the build directory.
-        if name in (_AGENT_INSTALL_SCRIPT.name, _RDP_ENABLE_SCRIPT.name):
+        if name in _NON_OVERRIDABLE_SCRIPT_NAMES:
             continue
         path = dest_dir / name
         path.write_text(content, encoding="utf-8")
@@ -332,13 +424,32 @@ def build_firstboot_iso(
     # filename, so the binary is copied to the fixed name the runner expects.
     config_path = dest_dir / _AGENT_CONFIG_NAME
     config_path.write_text(agent.config_toml, encoding="utf-8")
-    binary_on_disc = dest_dir / _AGENT_BINARY_NAME
+    binary_on_disc = dest_dir / _AGENT_BINARY_NAMES[platform]
     if agent.binary_path != binary_on_disc:
         shutil.copy(agent.binary_path, binary_on_disc)
 
+    install_script = _AGENT_INSTALL_SCRIPTS[platform]
+    agent_scripts = [install_script]
+    files = [binary_on_disc, config_path]
+    if payload is not None:
+        # Rendered rather than copied: a firstboot script takes no arguments, so
+        # the payload's disc name, its digest and the install directory have to
+        # be baked in. Written into ``dest_dir`` alongside the other renders so
+        # the disc carries exactly what this build resolved.
+        stage_script = dest_dir / _PAYLOAD_STAGE_SCRIPT.name
+        stage_script.write_text(
+            _PAYLOAD_STAGE_SCRIPT.read_text(encoding="utf-8")
+            .replace("__PAYLOAD_NAME__", PRODUCT_PAYLOAD_DISC_NAME)
+            .replace("__PAYLOAD_SHA256__", payload.sha256)
+            .replace("__INSTALL_DIR__", PRODUCT_INSTALL_DIR),
+            encoding="utf-8",
+        )
+        agent_scripts.append(stage_script)
+        files.append(_payload_on_disc(payload.archive_path, dest_dir))
+
     isokit.build_config_iso(
         iso_path,
-        scripts=[*scripts, _AGENT_INSTALL_SCRIPT, *password_scripts],
-        files=[binary_on_disc, config_path],
+        scripts=[*scripts, *agent_scripts, *password_scripts],
+        files=files,
     )
     return iso_path

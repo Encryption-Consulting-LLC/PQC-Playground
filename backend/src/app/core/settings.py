@@ -126,6 +126,12 @@ class Settings(BaseSettings):
     #   ``EXECUTOR_AGENT_PATH`` — filesystem path on both the API and worker
     #     hosts to the same pki-executor agent binary embedded into each
     #     firstboot ISO. The API hashes it during preflight; the worker bundles it.
+    #   ``EXECUTOR_AGENT_PATH_LINUX`` — the same, for the Linux product
+    #     templates, which run the musl build of the same crate release rather
+    #     than the .exe. Kept a separate setting rather than derived from the
+    #     Windows one: they are separate release artifacts, and an operator
+    #     deploying only Windows components should not have to supply a Linux
+    #     binary they will never boot.
     #   ``BACKEND_PUBLIC_URL`` — the browser-facing origin (``http(s)://host:port``);
     #     also the *default* target baked into the agent's executor.toml.
     # If EXECUTOR_AGENT_PATH is unset, the backend uses the repo-bundled
@@ -134,7 +140,14 @@ class Settings(BaseSettings):
     # golden images whose runner predates the v2 manifest. Per-template
     # provisioning config is NOT baked here — it lives on
     # the VM registry and is dispatched after the agent phones home.
-    executor_agent_path: str | None = bundled_executor_agent_path()
+    #   ``CERTSECURE_PAYLOAD_PATH`` — filesystem path on the worker host to the
+    #     CertSecure Manager installation tarball. It rides the firstboot ISO as
+    #     a payload file (~489 MB per product VM), which is why it is worker
+    #     config rather than a settings-document field: it is a build input like
+    #     the agent binary, not something an operator edits per deployment.
+    certsecure_payload_path: str | None = None
+    executor_agent_path: str | None = bundled_executor_agent_path("windows")
+    executor_agent_path_linux: str | None = bundled_executor_agent_path("linux")
     backend_public_url: str | None = None
 
     # ``AGENT_BACKEND_URL`` — optional override for the origin baked into the
@@ -219,7 +232,26 @@ class Settings(BaseSettings):
 
     @property
     def executor_bundling_enabled(self) -> bool:
-        return bool(self.executor_agent_path and self.backend_public_url)
+        """Whether *any* guest can be given an agent.
+
+        Deliberately not per-platform: bundling is an operator-level switch, and
+        the per-platform binary is checked at clone time by
+        ``executor_agent_path_for`` so a missing Linux artifact surfaces as a
+        clear op error on the VM that needed it, rather than silently
+        downgrading every Linux clone to an agentless one that never provisions.
+        """
+        return bool(
+            (self.executor_agent_path or self.executor_agent_path_linux)
+            and self.backend_public_url
+        )
+
+    def executor_agent_path_for(self, platform: str) -> str | None:
+        """The agent binary this guest platform boots, or ``None``."""
+        return (
+            self.executor_agent_path_linux
+            if platform == "linux"
+            else self.executor_agent_path
+        )
 
     @property
     def effective_agent_backend_url(self) -> str | None:

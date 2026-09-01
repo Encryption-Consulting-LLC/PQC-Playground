@@ -17,11 +17,16 @@ import {
   connectionPorts,
   configurationNameCollision,
   domainJoinBlockReason,
+  domainRelationshipBlockReason,
+  domainRelationshipKind,
+  inferEdgeType,
+  productIntegrationEdge,
   domainJoinEdge,
   domainJoinOperations,
   domainRadius,
   domainRegionBlocker,
   domainRegionSummary,
+  findDomainForNode,
   edgeStyle,
   isConnectable,
   lintTopologyRelationships,
@@ -260,14 +265,75 @@ describe("living domain model", () => {
     expect(domainJoinBlockReason(root, dc, [])).toBe(
       "CA01 is an offline root CA and must remain outside Active Directory.",
     )
+    // A product appliance cannot *join*, and the explanation now names the
+    // relationship it can take on instead of stopping at a refusal.
     expect(
       domainJoinBlockReason(machine("product", "CBOM01", "cbom"), dc, []),
     ).toBe(
-      "CBOM01 is a Linux product server; domain integration is not implemented yet.",
+      "CBOM01 is a Linux product server and cannot join a domain; connect it " +
+        "to encon.pki's domain controller to register its DNS and trust instead.",
     )
     expect(
       domainJoinBlockReason(machine("web", "SRV1", "webServer"), dc, []),
     ).toBeNull()
+  })
+
+  it("routes a product appliance to integration, never to a domain join", () => {
+    // The two relationships connect the same pair of shapes and mean different
+    // things: one creates a computer account in the forest, the other only
+    // registers DNS and pushes trust. Inferring a `domainJoin` here would stage
+    // an op that runs `Add-Computer` on Ubuntu.
+    const product = machine("product", "CS01", "certsecure")
+    expect(inferEdgeType("certsecure", "domainController")).toBe(
+      EDGE_TYPE.productIntegration,
+    )
+    expect(inferEdgeType("webServer", "domainController")).toBe(
+      EDGE_TYPE.domainJoin,
+    )
+    expect(domainRelationshipKind(product)).toBe("integration")
+    expect(domainRelationshipKind(machine("web", "SRV1", "webServer"))).toBe(
+      "membership",
+    )
+    expect(domainRelationshipBlockReason(product, dc, [])).toBeNull()
+  })
+
+  it("lets a product appliance take on only one domain integration", () => {
+    const product = machine("product", "CS01", "certsecure")
+    const other = machine("dc2", "DC02", "domainController", {
+      domainName: "other.pki",
+    })
+    const edges = [productIntegrationEdge("product", "dc")]
+    expect(domainRelationshipBlockReason(product, dc, edges)).toBe(
+      "CS01 already integrates with encon.pki.",
+    )
+    expect(domainRelationshipBlockReason(product, other, edges)).toBe(
+      "CS01 already integrates with another domain.",
+    )
+  })
+
+  it("grows the domain circle around an integrated product", () => {
+    // The circle clears the footprint of everything that belongs to the domain,
+    // whichever way it belongs. Counting only joins left a product sitting
+    // outside a circle it had just been dropped into, and the next drag read
+    // that as having left and proposed dropping the integration.
+    const movedDc = { ...dc, position: { x: 0, y: 0 } }
+    const product = {
+      ...machine("product", "CS01", "certsecure"),
+      // Inside the exit margin (radius 520 + 40), so the drag reads as
+      // "belongs here" rather than as the drag-out-to-leave gesture.
+      position: { x: 540, y: 0 },
+    }
+    const nodes = [movedDc, product]
+    const bare = domainRadius(movedDc, nodes, [])
+    const withProduct = domainRadius(movedDc, nodes, [
+      productIntegrationEdge("product", "dc"),
+    ])
+    expect(withProduct).toBeGreaterThan(bare)
+    expect(
+      findDomainForNode(product, nodes, [
+        productIntegrationEdge("product", "dc"),
+      ])?.id,
+    ).toBe("dc")
   })
 
   it("rejects a domain bubble that touches an offline root CA", () => {

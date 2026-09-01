@@ -27,7 +27,11 @@
 
 import { DEFAULT_VIEWPORT, useTopologyStore } from "@/store/topology"
 import { useStagingStore } from "@/store/staging"
-import { domainLabel, serviceSocketHandleId } from "@/lib/topology"
+import {
+  domainLabel,
+  domainRelationshipKind,
+  serviceSocketHandleId,
+} from "@/lib/topology"
 import { SERVICE_SOCKET } from "@/constants/topology"
 import { projectNetbiosPrefix } from "@/lib/projectNaming"
 import type { DomainSyncChange } from "@/store/topology"
@@ -156,7 +160,13 @@ export function buildPkiTemplateIntoStores(
             .getState()
             .nodes.find((n) => n.id === nodeId)
           if (!node) return null
-          return { nodeId, nodeName: node.data.name, dcId, domainName }
+          return {
+            nodeId,
+            nodeName: node.data.name,
+            dcId,
+            domainName,
+            kind: domainRelationshipKind(node),
+          }
         })
         .filter((c): c is DomainSyncChange => c !== null)
       useTopologyStore.getState().applyDomainChanges(changes)

@@ -36,6 +36,28 @@ def test_templates_without_a_tail_only_settle_their_inherited_reboot():
         assert [step.id for step in provision_steps(template)] == ["settle-reboot"]
 
 
+def test_a_linux_product_does_not_inherit_the_windows_settle_reboot():
+    # The settle reboot exists to consume ws-2025-base's unconsumed CBS reboot
+    # mark — a fact about one Windows golden image with no Ubuntu counterpart.
+    # Taking it anyway would add a reboot plus a full reconnect wait to every
+    # product deployment to fix nothing, and it is the easiest thing to inherit
+    # by accident because `provision_steps` prepends it before every other
+    # branch.
+    steps = provision_steps("certsecure", node_id="product")
+    assert steps
+    assert "settle-reboot" not in [step.id for step in steps]
+    assert steps[0].id == "apt-refresh"
+
+
+def test_a_product_with_no_integration_still_installs():
+    # An appliance nobody wired to a domain is a valid drawing: it installs, and
+    # it simply registers no DNS records and pushes its certificate nowhere.
+    ids = [step.id for step in provision_steps("certsecure", node_id="product")]
+    assert "product-install" in ids
+    assert "product-dns" not in ids
+    assert not [step_id for step_id in ids if step_id.startswith("trust-")]
+
+
 def test_ca_install_params_come_from_template_config():
     steps = provision_steps("certificateAuthority", ca_type="Root")
     node = NodeContext(

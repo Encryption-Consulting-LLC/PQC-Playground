@@ -46,7 +46,13 @@ from app.core.db.models import now_ms
 from app.core.db.sync import worker_db
 from app.core.errors import map_vmkit_error
 from app.core.esxi import load_target_sync
-from app.core.firstboot import AgentBundle, build_firstboot_iso, platform_for_template
+from app.core.agent_binary import sha256_file
+from app.core.firstboot import (
+    AgentBundle,
+    ProductPayload,
+    build_firstboot_iso,
+    platform_for_template,
+)
 from app.core.golden_image import (
     GoldenImageConfig,
     GoldenImagePreflight,
@@ -61,7 +67,7 @@ from app.core.ippool import (
     release_ip_sync,
 )
 from app.core.infrastructure import (
-    LINUX_PRODUCT_TEMPLATES,
+    PAYLOAD_PRODUCT_TEMPLATES,
     deployment_profiles_from_doc,
     role_for_template,
 )
@@ -168,11 +174,20 @@ _SIMULATED_PHASES: dict[str, tuple[str, str, str]] = {
 _SIMULATED_PERCENTS = (33.0, 66.0, 100.0)
 _SIMULATED_STEP_SECONDS = 0.6
 
-_PRODUCT_SETUP_LABELS = {
-    "certsecure": "Set up CertSecure Manager (stub)",
-    "cbom": "Set up CBOM Secure (stub)",
-    "codesign": "Set up CodeSign Secure (stub)",
-}
+
+def _product_payload(template: str) -> "ProductPayload | None":
+    """The installation tree ``template`` ships on its firstboot ISO.
+
+    ``None`` for every template without one — which is every Windows template
+    and the products whose installer is not wired yet. The digest is computed
+    here, on the worker, rather than configured: it is baked into the staging
+    script so the guest verifies the bytes it actually received, and a
+    configured digest could only ever disagree with the file beside it.
+    """
+    if template not in PAYLOAD_PRODUCT_TEMPLATES:
+        return None
+    archive = Path(settings.certsecure_payload_path or "")
+    return ProductPayload(archive_path=archive, sha256=sha256_file(archive))
 
 
 @celery_app.task(name="clone_vm")
@@ -655,11 +670,14 @@ def _run_provision_op(
         SequenceCancelled,
         SequenceError,
     )
-    from app.core.sequences.context import dns_records_for_context
+    from app.core.sequences.context import (
+        dns_records_for_context,
+        provision_context_nodes,
+    )
     from app.core.sequences.definitions import provision_steps
     from app.core.sequences.worker import run_op_sequence
     from app.core.template_config import extract_template_config
-    from app.core.topology import PROVISION_SUFFIX
+    from app.core.topology import PROVISION_SUFFIX, product_integration
 
     create_op = next(
         (item for item in ops if item.id == op.id.removesuffix(PROVISION_SUFFIX)),
@@ -678,43 +696,6 @@ def _run_provision_op(
     registry = conn_db["vm_registry"].find_one({"vmName": vm_name}) or {}
     vm_id = (registry.get("agent") or {}).get("vmId")
     ip = registry.get("ip")
-    if template in LINUX_PRODUCT_TEMPLATES:
-        _set_visible_step(
-            state,
-            op.id,
-            "service-setup",
-            "running",
-            push,
-            percent=0.0,
-            phase=_PRODUCT_SETUP_LABELS[template],
-        )
-        # Intentional placeholder until product installation automation lands.
-        # Keeping it as a real provision step makes the future implementation a
-        # drop-in replacement without changing the plan/topology contract.
-        time.sleep(_SIMULATED_STEP_SECONDS)
-        _set_visible_step(
-            state,
-            op.id,
-            "service-setup",
-            "done",
-            push,
-            percent=100.0,
-            phase="Service setup stub complete",
-        )
-        _set_provision_state(conn_db, vm_name, "applied")
-        state[op.id] = OpRunState(
-            status="done",
-            percent=100.0,
-            phase="Service setup stub complete",
-            result={
-                "vmName": vm_name,
-                "setupStub": True,
-                **({"ip": ip} if ip else {}),
-            },
-            steps=state[op.id].steps,
-        )
-        push()
-        return True
     if vm_id is None:
         for step_id, phase in (
             ("agent-ready", "No executor agent required"),
@@ -739,6 +720,9 @@ def _run_provision_op(
         ca_type=create_op.params.get("caType"),
         node_id=op.target,
         dns_records=dns_records,
+        integration=(
+            product_integration(topology, op.target) if topology is not None else None
+        ),
     )
 
     _set_provision_state(conn_db, vm_name, "applying")
@@ -840,7 +824,12 @@ def _run_provision_op(
             # pki URLs resolve even when the DC VM isn't up yet.
             domain_name, netbios = _plan_domain_facts(ops, topology)
             ctx = RunContext(
-                nodes={"primary": node},
+                # The primary plus whatever siblings are already registered. For
+                # a Windows tail that is decoration — every step targets
+                # ``primary`` — but a product's trust push and DNS registration
+                # name other nodes, and the compiler has already made this op
+                # depend on them being provisioned.
+                nodes=provision_context_nodes(conn_db, topology, node),
                 domain_name=domain_name,
                 netbios=netbios,
                 pki_host=f"pki.{domain_name}" if domain_name else None,
@@ -991,11 +980,13 @@ def _run_clone_op(
     # password reset — otherwise hand-editing one script would silently produce
     # a VM with no address that never phones home (and so never provisions).
     authored = bool(iso_id)
-    bundling = (
-        settings.executor_bundling_enabled
-        and not authored
-        and template not in LINUX_PRODUCT_TEMPLATES
-    )
+    # Every template that is not an uploaded disc gets an agent, Linux products
+    # included: the same crate release ships a musl build, and without it a
+    # product node renders a red "Executor offline" dot and its install is a
+    # manual step on every deployment.
+    bundling = settings.executor_bundling_enabled and not authored
+    platform = platform_for_template(template)
+    agent_binary = settings.executor_agent_path_for(platform)
     _set_visible_step(
         state,
         op.id,
@@ -1022,17 +1013,28 @@ def _run_clone_op(
             )
             push()
             return False
-        # Fail cleanly BEFORE claiming an address if the agent binary is missing
-        # on the worker host — an operator config error, not a per-VM one.
-        if bundling and not Path(settings.executor_agent_path).is_file():
-            detail = (
+        # Fail cleanly BEFORE claiming an address if a build input is missing on
+        # the worker host — an operator config error, not a per-VM one. Both
+        # checks are per-platform: a console deploying only Windows components
+        # has no Linux agent and should not be asked for one.
+        missing_input = None
+        if bundling and not (agent_binary and Path(agent_binary).is_file()):
+            missing_input = (
                 "Executor agent binary not found on the worker host "
-                "(EXECUTOR_AGENT_PATH)."
+                f"({'EXECUTOR_AGENT_PATH_LINUX' if platform == 'linux' else 'EXECUTOR_AGENT_PATH'})."
             )
+        elif bundling and template in PAYLOAD_PRODUCT_TEMPLATES:
+            archive = settings.certsecure_payload_path
+            if not (archive and Path(archive).is_file()):
+                missing_input = (
+                    "Product installation payload not found on the worker host "
+                    "(CERTSECURE_PAYLOAD_PATH)."
+                )
+        if missing_input is not None:
             state[op.id] = OpRunState(
                 status="error",
-                detail=detail,
-                steps=_fail_running_visible_step(state, op.id, detail),
+                detail=missing_input,
+                steps=_fail_running_visible_step(state, op.id, missing_input),
             )
             push()
             return False
@@ -1064,11 +1066,7 @@ def _run_clone_op(
     # and claiming one was set would be a lie the console would then fail on.
     local_admin_password = ""
     local_admin_enc: dict | None = None
-    if (
-        not authored
-        and platform_for_template(template) == "windows"
-        and template != "domainController"
-    ):
+    if not authored and platform == "windows" and template != "domainController":
         local_admin_password = load_image_admin_password_sync(db)
         if local_admin_password:
             local_admin_enc = encrypt_secret(local_admin_password)
@@ -1114,6 +1112,7 @@ def _run_clone_op(
                 # survivor (where we deliberately never re-mint).
                 template_config = extract_template_config(template, op.params)
                 agent_bundle = None
+                payload: ProductPayload | None = None
                 # Mint + bake an agent only when bundling is on AND the VM does
                 # not already exist. A redelivery over a survivor (VmExists
                 # below) must keep whatever token the running VM booted with —
@@ -1150,16 +1149,23 @@ def _run_clone_op(
                         },
                     )
                     agent_bundle = AgentBundle(
-                        binary_path=Path(settings.executor_agent_path),
+                        binary_path=Path(agent_binary),
                         config_toml=render_executor_config(
                             ExecutorAgentConfig(
                                 vm_id=vm_id,
                                 agent_token=token,
+                                # Plain HTTP on the guest VLAN, deliberately. The
+                                # agent trusts ``webpki_roots::TLS_SERVER_ROOTS``
+                                # only and never reads ``/etc/ssl/certs``, so a
+                                # backend behind a private-CA certificate would
+                                # fail its handshake with no way to fix it from
+                                # the guest.
                                 backend_url=settings.effective_agent_backend_url,
                                 role=owner_role,
                             )
                         ),
                     )
+                    payload = _product_payload(template)
                 iso = build_firstboot_iso(
                     template=template,
                     vm_name=vm_name,
@@ -1183,6 +1189,11 @@ def _run_clone_op(
                     # Operator-authored overrides/additions (Config ISO, PACK
                     # mode). Empty for the default path.
                     authored_scripts=[(f.name, f.content) for f in op.files],
+                    # The product's installation tree, staged (not installed) by
+                    # firstboot. ``None`` for every other template, and for a
+                    # redelivery over a surviving VM, which never re-mints and so
+                    # never rebuilds a disc that would boot anyway.
+                    payload=payload,
                 )
             req = CloneRequest(
                 name=vm_name,

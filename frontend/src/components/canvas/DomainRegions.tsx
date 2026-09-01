@@ -6,6 +6,8 @@ import {
   domainLabel,
   domainJoinEdge,
   domainRadius,
+  domainRelationshipEdgeType,
+  productIntegrationEdge,
   domainRegionSummary,
   isConnectable,
   nodeCenter,
@@ -57,23 +59,34 @@ export function DomainRegions({
         {domains.map((dc) => {
           const center = nodeCenter(dc)
           const activePreview = preview?.dcId === dc.id ? preview : null
+          // The circle previews the drag by pretending the relationship the
+          // drop would create already exists — of whichever kind that is, since
+          // both grow the radius (see `domainRadius`).
+          const previewNode = activePreview
+            ? nodes.find((node) => node.id === activePreview.nodeId)
+            : undefined
+          const previewEdgeType = previewNode
+            ? domainRelationshipEdgeType(previewNode)
+            : EDGE_TYPE.domainJoin
           const previewEdges =
             activePreview?.allowed &&
             !edges.some(
               (edge) =>
                 edge.source === activePreview.nodeId &&
                 edge.target === dc.id &&
-                edge.data?.edgeType === EDGE_TYPE.domainJoin,
+                edge.data?.edgeType === previewEdgeType,
             )
               ? [
                   ...edges.filter(
                     (edge) =>
                       !(
                         edge.source === activePreview.nodeId &&
-                        edge.data?.edgeType === EDGE_TYPE.domainJoin
+                        edge.data?.edgeType === previewEdgeType
                       ),
                   ),
-                  domainJoinEdge(activePreview.nodeId, dc.id, true),
+                  previewEdgeType === EDGE_TYPE.productIntegration
+                    ? productIntegrationEdge(activePreview.nodeId, dc.id, true)
+                    : domainJoinEdge(activePreview.nodeId, dc.id, true),
                 ]
               : edges
           const radius = domainRadius(dc, nodes, previewEdges)

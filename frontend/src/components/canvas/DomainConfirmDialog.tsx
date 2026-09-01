@@ -79,6 +79,22 @@ function describe(changes: DomainSyncChange[]): {
   // Single-node drag — the common case — gets a precise message.
   if (changes.length === 1) {
     const c = changes[0]
+    // A product appliance is never domain-joined, so saying so would describe
+    // something that does not happen — the same reason a joined lab's tab says
+    // "Close lab" rather than "Delete project".
+    if (c.kind === "integration") {
+      if (c.dcId)
+        return {
+          title: "Integrate with domain?",
+          body: `"${c.nodeName}" will register its service names in ${c.domainName} and every machine in that domain will trust its certificate. It is not domain-joined.`,
+          confirmLabel: "Integrate",
+        }
+      return {
+        title: "Remove domain integration?",
+        body: `"${c.nodeName}" will stop registering DNS records in its domain. Records and trust already deployed are left in place.`,
+        confirmLabel: "Remove integration",
+      }
+    }
     if (c.dcId)
       return {
         title: "Join domain?",

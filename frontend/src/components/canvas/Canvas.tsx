@@ -35,8 +35,10 @@ import { OP_KIND, actionableOps, type StagedOp } from "@/lib/staging"
 import { TEMPLATE_BY_ID } from "@/constants/templates"
 import { DRAFT_NODE_SIZE, EDGE_TYPE } from "@/constants/topology"
 import {
-  domainJoinBlockReason,
-  domainJoinOperations,
+  domainRelationshipBlockReason,
+  domainRelationshipEdge,
+  domainRelationshipKind,
+  domainRelationshipOperations,
   domainRegionBlocker,
   canConnectServiceSockets,
   findDomainForNode,
@@ -436,25 +438,23 @@ export function Canvas() {
       const dc =
         centeredDomain ??
         (overlappingDomain &&
-        domainJoinBlockReason(node, overlappingDomain, edges)
+        domainRelationshipBlockReason(node, overlappingDomain, edges)
           ? overlappingDomain
           : null)
-      const currentDomain = edges.find(
-        (edge) =>
-          edge.source === node.id &&
-          edge.data?.edgeType === EDGE_TYPE.domainJoin,
-      )?.target
+      const currentDomain = domainRelationshipEdge(node, edges)?.target
       if (!dc || currentDomain === dc.id) {
         setDomainDragPreview(null)
         return
       }
-      const reason = domainJoinBlockReason(node, dc, edges)
+      const reason = domainRelationshipBlockReason(node, dc, edges)
       setDomainDragPreview({
         nodeId: node.id,
         dcId: dc.id,
         allowed: reason === null,
         reason,
-        operations: reason ? [] : domainJoinOperations(node, dc, dragNodes),
+        operations: reason
+          ? []
+          : domainRelationshipOperations(node, dc, dragNodes),
       })
     },
     [nodes, edges, applyNodeChanges, setOverlapNode],
@@ -547,18 +547,14 @@ export function Canvas() {
       const dropDomain =
         centeredDropDomain ??
         (overlappingDropDomain &&
-        domainJoinBlockReason(droppedNode, overlappingDropDomain, edges)
+        domainRelationshipBlockReason(droppedNode, overlappingDropDomain, edges)
           ? overlappingDropDomain
           : null)
-      const currentDomain = edges.find(
-        (edge) =>
-          edge.source === node.id &&
-          edge.data?.edgeType === EDGE_TYPE.domainJoin,
-      )?.target
+      const currentDomain = domainRelationshipEdge(node, edges)?.target
       const invalidReason = dcBlocker
         ? dcBlocker.reason
         : dropDomain && currentDomain !== dropDomain.id
-          ? domainJoinBlockReason(droppedNode, dropDomain, edges)
+          ? domainRelationshipBlockReason(droppedNode, dropDomain, edges)
           : null
       if (invalidReason) {
         if (start) {
@@ -585,7 +581,7 @@ export function Canvas() {
       }
       setPendingOperations(
         dropDomain
-          ? domainJoinOperations(droppedNode, dropDomain, dragNodes)
+          ? domainRelationshipOperations(droppedNode, dropDomain, dragNodes)
           : [],
       )
       setPendingChanges(changes)
@@ -628,7 +624,7 @@ export function Canvas() {
 
   const requestAccessibleDomainJoin = useCallback(
     (node: Node<MachineData>, dc: Node<MachineData>) => {
-      const reason = domainJoinBlockReason(node, dc, edges)
+      const reason = domainRelationshipBlockReason(node, dc, edges)
       if (reason) {
         toast.error(reason)
         return
@@ -650,7 +646,11 @@ export function Canvas() {
       const previewNodes = nodes.map((candidate) =>
         candidate.id === node.id ? previewNode : candidate,
       )
-      const operations = domainJoinOperations(previewNode, dc, previewNodes)
+      const operations = domainRelationshipOperations(
+        previewNode,
+        dc,
+        previewNodes,
+      )
 
       dragStart.current = {
         id: node.id,
@@ -672,6 +672,7 @@ export function Canvas() {
           nodeName: node.data.name,
           dcId: dc.id,
           domainName: dc.data.config?.domainName ?? dc.data.name,
+          kind: domainRelationshipKind(node),
         },
       ])
     },

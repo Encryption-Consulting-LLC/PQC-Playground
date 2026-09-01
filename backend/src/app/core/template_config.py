@@ -75,6 +75,11 @@ _NETBIOS = re.compile(r"^[A-Za-z0-9-]{1,15}$")
 _COMMON_NAME = re.compile(r"^[A-Za-z0-9 ._-]{1,64}$")
 _CERT_PATH = re.compile(r"^[A-Za-z]:\\[A-Za-z0-9 ._\\-]{1,120}$")
 _HTTP_URL = re.compile(r"^https?://[A-Za-z0-9._~:/?#\[\]@!$&'()*+,;=%-]{1,200}$")
+#: A Keycloak realm name. Mirrors ``install-linux.sh``'s own ``validate_inputs``
+#: rule — the realm is user-facing in URLs, and anything outside this set breaks
+#: Keycloak's own paths. Checked here so a bad value is a 422 at the deploy gate
+#: rather than a failure 595 seconds into the install.
+_REALM = re.compile(r"^[A-Za-z0-9._-]{1,64}$")
 
 
 def _reverse_zone(value: str) -> bool:
@@ -186,7 +191,23 @@ TEMPLATE_CONFIG_FIELDS: dict[str, dict[str, FieldSpec]] = {
     },
     "client": {},
     "standalone": {},
-    "certsecure": {},
+    # The four names the vendor installer prompts for, and nothing else. Every
+    # other value it writes is image-invariant, and the two SSL paths it also
+    # asks for are backend-controlled (the certificate is generated into the
+    # product tree by ``certsecure.make_cert``) rather than operator-set.
+    #
+    # The defaults are the lab's own domain shape, so an operator who wires the
+    # node to a domain controller and presses Deploy gets working names without
+    # typing any. They are *not* derived from the DC's configured domain here:
+    # this schema validates one node's params with no view of the graph, and a
+    # default that silently disagreed with the domain would be worse than one
+    # that is visibly a placeholder.
+    "certsecure": {
+        "frontendHost": FieldSpec(_matches(_DNS), "certsecure.encon.pki"),
+        "backendHost": FieldSpec(_matches(_DNS), "certsecure-api.encon.pki"),
+        "keycloakHost": FieldSpec(_matches(_DNS), "kc.encon.pki"),
+        "keycloakRealm": FieldSpec(_matches(_REALM), "encon.pki"),
+    },
     "cbom": {},
     "codesign": {},
 }

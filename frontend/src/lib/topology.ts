@@ -118,6 +118,14 @@ export function inferEdgeType(
   sourceTypeId: string,
   targetTypeId: string,
 ): EdgeType {
+  // Before the domain-controller catch-all, not after: a Linux product wired to
+  // a DC integrates with it, and reading that as a `domainJoin` would stage an
+  // op that tries to run `Add-Computer` on Ubuntu.
+  if (
+    targetTypeId === "domainController" &&
+    templatePlatform(sourceTypeId) === "linux"
+  )
+    return EDGE_TYPE.productIntegration
   if (targetTypeId === "domainController") return EDGE_TYPE.domainJoin
   if (
     sourceTypeId === "certificateAuthority" &&
@@ -142,6 +150,8 @@ export function connectionPorts(type: EdgeType): ConnectionPort[] {
       ]
     case EDGE_TYPE.domainJoin:
       return [CONNECTION_PORT.domainBoundary]
+    case EDGE_TYPE.productIntegration:
+      return [CONNECTION_PORT.productIntegration]
     case EDGE_TYPE.network:
       return []
   }
@@ -211,6 +221,10 @@ export const CONNECTION_PORT_GUIDANCE: Record<
   [CONNECTION_PORT.domainBoundary]: {
     label: "Domain boundary",
     capabilities: ["AD membership", "DNS resolver", "LDAP publication"],
+  },
+  [CONNECTION_PORT.productIntegration]: {
+    label: "Product integration",
+    capabilities: ["DNS registration", "Machine-root trust"],
   },
   [CONNECTION_PORT.webHost]: {
     label: "Web host",
@@ -625,6 +639,19 @@ export function connectionGuidance(
         ],
         ports,
       }
+    case EDGE_TYPE.productIntegration:
+      return {
+        intent: "Registers the product's names and trusts its certificate",
+        requirements: [
+          "Configured domain controller and product appliance",
+          "Product belongs to no other domain",
+        ],
+        operations: [
+          "provision: register A records at the domain controller and add the " +
+            "product's certificate to every domain machine's root store",
+        ],
+        ports,
+      }
     case EDGE_TYPE.network:
       return {
         intent: "Unsupported generic connection",
@@ -885,9 +912,17 @@ export function domainRadius(
   edges: Edge[],
 ): number {
   const dcCenter = nodeCenter(dc)
+  // Both relationship kinds count. The circle's job is to clear the footprint
+  // of everything that belongs to the domain, and an integrated product does —
+  // it just belongs differently. Counting only joins left a product sitting
+  // outside a circle it had been dropped into, at which point the next drag
+  // read it as having left and proposed dropping the integration.
   const members = edges
     .filter(
-      (e) => e.target === dc.id && e.data?.edgeType === EDGE_TYPE.domainJoin,
+      (e) =>
+        e.target === dc.id &&
+        (e.data?.edgeType === EDGE_TYPE.domainJoin ||
+          e.data?.edgeType === EDGE_TYPE.productIntegration),
     )
     .map((e) => nodes.find((n) => n.id === e.source))
     .filter((n): n is Node<MachineData> => !!n)
@@ -978,16 +1013,19 @@ export function truncateLabel(
 }
 
 /**
- * Whether `node` can be auto-joined to a domain by being dragged into a region.
- * Domain controllers define domains (they don't join others), root CAs must
- * stay out of any domain, and a VM must be configured before it can join.
+ * Whether `node` can take on a domain relationship by being dragged into a
+ * region. Domain controllers define domains (they don't join others), root CAs
+ * must stay out of any domain, and a VM must be configured first.
+ *
+ * A Linux product appliance *is* eligible — it just takes the integration
+ * relationship rather than a membership (see `domainRelationshipKind`). It was
+ * excluded outright while there was nothing for it to take on.
  */
 export function isDomainEligible(
   node: Node<MachineData>,
   edges: Edge[],
 ): boolean {
   if (node.data.typeId === "domainController") return false
-  if (templatePlatform(node.data.typeId) === "linux") return false
   if (!isConnectable(node.data)) return false
   if (
     node.data.typeId === "certificateAuthority" &&
@@ -995,6 +1033,88 @@ export function isDomainEligible(
   )
     return false
   return true
+}
+
+/**
+ * What dropping this node inside a domain's region means.
+ *
+ * Two different relationships share one gesture, because to the person drawing
+ * it they are the same intent — "this machine belongs to that domain" — and the
+ * canvas has exactly one way to express that. What differs is everything after:
+ * a Windows machine joins the forest, and a Linux product appliance stays
+ * outside it and gets DNS plus trust instead.
+ */
+export type DomainRelationshipKind = "membership" | "integration"
+
+export function domainRelationshipKind(
+  node: Node<MachineData>,
+): DomainRelationshipKind {
+  return templatePlatform(node.data.typeId) === "linux"
+    ? "integration"
+    : "membership"
+}
+
+/** The edge type a node's domain relationship is recorded as. */
+export function domainRelationshipEdgeType(node: Node<MachineData>): EdgeType {
+  return domainRelationshipKind(node) === "integration"
+    ? EDGE_TYPE.productIntegration
+    : EDGE_TYPE.domainJoin
+}
+
+/** The node's existing domain relationship edge, of whichever kind it uses. */
+export function domainRelationshipEdge(
+  node: Node<MachineData>,
+  edges: Edge[],
+): Edge | undefined {
+  const kind = domainRelationshipEdgeType(node)
+  return edges.find(
+    (edge) => edge.source === node.id && edge.data?.edgeType === kind,
+  )
+}
+
+/** Whether this node can take on `dc`'s domain relationship, whichever it is. */
+export function domainRelationshipBlockReason(
+  node: Node<MachineData>,
+  dc: Node<MachineData>,
+  edges: Edge[],
+): string | null {
+  return domainRelationshipKind(node) === "integration"
+    ? productIntegrationBlockReason(node, dc, edges)
+    : domainJoinBlockReason(node, dc, edges)
+}
+
+/**
+ * Whether a Linux product appliance can be wired to this domain controller.
+ *
+ * A product does *not* join the domain — it stays outside the forest with no
+ * computer account. What the relationship buys is the two things a Linux
+ * appliance cannot arrange for itself: its service names in the domain's DNS
+ * zone, and its (self-signed) certificate in every domain machine's root store,
+ * so a browser on any lab node opens it without a warning.
+ */
+export function productIntegrationBlockReason(
+  node: Node<MachineData>,
+  dc: Node<MachineData>,
+  edges: Edge[],
+): string | null {
+  if (!isConnectable(dc.data)) {
+    return `Configure ${dc.data.name} before integrating with its domain.`
+  }
+  if (!isConnectable(node.data)) {
+    return `Configure ${node.data.name} before integrating it with a domain.`
+  }
+  const current = edges.find(
+    (edge) =>
+      edge.source === node.id &&
+      edge.data?.edgeType === EDGE_TYPE.productIntegration,
+  )
+  if (current?.target === dc.id) {
+    return `${node.data.name} already integrates with ${domainLabel(dc)}.`
+  }
+  if (current) {
+    return `${node.data.name} already integrates with another domain.`
+  }
+  return null
 }
 
 /** Explains whether a node can join a specific domain through either drag/drop or the accessible action. */
@@ -1010,7 +1130,10 @@ export function domainJoinBlockReason(
     return "A domain controller defines its own boundary and cannot join another domain."
   }
   if (templatePlatform(node.data.typeId) === "linux") {
-    return `${node.data.name} is a Linux product server; domain integration is not implemented yet.`
+    // Reachable from the drag-into-a-domain-circle path, which is specifically
+    // a *join*. The product's own relationship is drawn as an edge instead, and
+    // saying so is more use than refusing without a next step.
+    return `${node.data.name} is a Linux product server and cannot join a domain; connect it to ${domainLabel(dc)}'s domain controller to register its DNS and trust instead.`
   }
   if (!isConnectable(node.data)) {
     return `Configure ${node.data.name} before joining it to a domain.`
@@ -1032,6 +1155,25 @@ export function domainJoinBlockReason(
 }
 
 /** Backend commands that the canonical domainJoin operation expands into for this role. */
+/** The generated-operations preview for whichever relationship applies. */
+export function domainRelationshipOperations(
+  node: Node<MachineData>,
+  dc: Node<MachineData>,
+  nodes: Node<MachineData>[],
+): string[] {
+  if (domainRelationshipKind(node) === "integration") {
+    // Every one of these runs inside the product's own provision op rather than
+    // as a separate staged operation, which is why connecting a product stages
+    // nothing on the canvas.
+    return [
+      `dns.apply_resources · A records in ${domainLabel(dc)}`,
+      "certsecure.make_cert · self-signed TLS certificate",
+      "cert.addstore · trust it on every domain machine",
+    ]
+  }
+  return domainJoinOperations(node, dc, nodes)
+}
+
 export function domainJoinOperations(
   node: Node<MachineData>,
   dc: Node<MachineData>,
@@ -1235,6 +1377,37 @@ export function domainRegionBlocker(
  * `domainJoin` edgeType so existing derived logic (badges, member counts)
  * continues to work unchanged.
  */
+/**
+ * The product-integration edge, drawn rather than hidden.
+ *
+ * `domainJoinEdge` is hidden because the domain circle already says
+ * "membership" and a second line would be noise. This one stays visible on
+ * purpose: it connects the same pair of shapes as a join and means something
+ * different, and the labelled cyan line is what keeps a reader from assuming
+ * the Linux box was domain-joined.
+ */
+export function productIntegrationEdge(
+  source: string,
+  target: string,
+  staged = false,
+): Edge {
+  const visual = edgeStyle(EDGE_TYPE.productIntegration)
+  return {
+    id: `e-integration-${source}-${target}`,
+    source,
+    target,
+    type: "capability",
+    data: {
+      edgeType: EDGE_TYPE.productIntegration,
+      ports: connectionPorts(EDGE_TYPE.productIntegration),
+      staged,
+      health: staged ? CONNECTION_HEALTH.planned : CONNECTION_HEALTH.verified,
+    },
+    ...visual,
+    style: staged ? { ...visual.style, opacity: 0.6 } : visual.style,
+  }
+}
+
 export function domainJoinEdge(
   source: string,
   target: string,
@@ -1389,7 +1562,10 @@ export function canConnect(
   }
 
   if (target.data.typeId === "domainController") {
-    const reason = domainJoinBlockReason(source, target, edges)
+    const reason =
+      templatePlatform(source.data.typeId) === "linux"
+        ? productIntegrationBlockReason(source, target, edges)
+        : domainJoinBlockReason(source, target, edges)
     return reason ? { ok: false, reason } : { ok: true }
   }
 
@@ -1625,6 +1801,16 @@ export function edgeStyle(
         labelStyle: { fill: color, fontSize: 11 },
       }
     }
+    case EDGE_TYPE.productIntegration:
+      // Distinct from the blue `domain join` in colour *and* label: the two
+      // connect the same pair of shapes and mean different things, and reading
+      // one as the other is the whole misconception this edge exists to avoid.
+      return {
+        style: { stroke: "#06b6d4", strokeWidth: 2, strokeDasharray: "4 3" },
+        animated: false,
+        label: "DNS + trust",
+        labelStyle: { fill: "#06b6d4", fontSize: 11 },
+      }
     case EDGE_TYPE.network:
       return {
         style: { stroke: "#94a3b8", strokeWidth: 1.5, strokeDasharray: "5 4" },

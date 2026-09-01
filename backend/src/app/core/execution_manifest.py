@@ -3,7 +3,6 @@
 from typing import Any
 
 from app.core.infrastructure import (
-    LINUX_PRODUCT_TEMPLATES,
     deployment_profiles_from_doc,
     role_for_template,
 )
@@ -19,7 +18,12 @@ from app.core.sequences.definitions import (
     provision_steps,
 )
 from app.core.sequences.model import DnsRecordContext, NodeContext, RunContext, Step
-from app.core.topology import PROVISION_SUFFIX, TopologyDocument, TopologyRole
+from app.core.topology import (
+    PROVISION_SUFFIX,
+    TopologyDocument,
+    TopologyRole,
+    product_integration,
+)
 
 
 #: Role-aware detail for a synthesized provision group's label — what the op
@@ -27,6 +31,7 @@ from app.core.topology import PROVISION_SUFFIX, TopologyDocument, TopologyRole
 _PROVISION_DETAIL = {
     TopologyRole.domain_controller: "AD DS forest",
     TopologyRole.root_ca: "Root CA setup",
+    TopologyRole.product: "Product installation",
 }
 
 
@@ -51,6 +56,15 @@ _COMMAND_LABELS = {
     "ocsp.install": "Install Online Responder",
     "ocsp.configure_revocation": "Configure OCSP revocation",
     "lab.verify": "Aggregate PKI health evidence",
+    "apt.refresh": "Refresh package lists",
+    "certsecure.write_hosts": "Write lab host entries",
+    "certsecure.make_cert": "Generate TLS certificate",
+    "certsecure.install": "Install CertSecure Manager",
+    "certsecure.harden": "Restrict credential file modes",
+    "certsecure.verify": "Verify product service",
+    "cert.addstore": "Trust certificate on this machine",
+    "dns.apply_resources": "Register DNS records",
+    "dns.verify": "Verify DNS records",
 }
 
 
@@ -60,7 +74,25 @@ def _label(command: str) -> str:
     )
 
 
-def _preview_context(topology: TopologyDocument, op) -> RunContext:
+#: Role -> template for the *preview* only. A role is not always enough to name
+#: a template — the three Linux products share ``product``, and the CA roles
+#: share ``certificateAuthority`` — but nothing in a preview reads another
+#: node's template beyond its shape, and the op being previewed supplies the
+#: real template for its own node (``primary_template`` below).
+_PREVIEW_TEMPLATE_BY_ROLE = {
+    TopologyRole.domain_controller: "domainController",
+    TopologyRole.root_ca: "certificateAuthority",
+    TopologyRole.issuing_ca: "certificateAuthority",
+    TopologyRole.web_server: "webServer",
+    TopologyRole.client: "client",
+    TopologyRole.standalone: "standalone",
+    TopologyRole.product: "certsecure",
+}
+
+
+def _preview_context(
+    topology: TopologyDocument, op, primary_template: str | None = None
+) -> RunContext:
     by_id = {}
     role_aliases = {
         TopologyRole.domain_controller: DC,
@@ -69,15 +101,13 @@ def _preview_context(topology: TopologyDocument, op) -> RunContext:
         TopologyRole.web_server: WEB,
     }
     aliases = {}
+    kind = str(getattr(op.kind, "value", op.kind))
+    primary_id = op.secondary if kind == "webServerCert" else op.target
+    secondary_id = op.target if kind == "webServerCert" else op.secondary
     for node in topology.nodes:
-        template = {
-            TopologyRole.domain_controller: "domainController",
-            TopologyRole.root_ca: "certificateAuthority",
-            TopologyRole.issuing_ca: "certificateAuthority",
-            TopologyRole.web_server: "webServer",
-            TopologyRole.client: "client",
-            TopologyRole.standalone: "standalone",
-        }[node.role]
+        template = _PREVIEW_TEMPLATE_BY_ROLE[node.role]
+        if node.id == primary_id and primary_template:
+            template = primary_template
         context = NodeContext(
             node_id=node.id,
             vm_name=node.name,
@@ -89,9 +119,12 @@ def _preview_context(topology: TopologyDocument, op) -> RunContext:
         if node.role in role_aliases:
             aliases[role_aliases[node.role]] = context
 
-    kind = str(getattr(op.kind, "value", op.kind))
-    primary_id = op.secondary if kind == "webServerCert" else op.target
-    secondary_id = op.target if kind == "webServerCert" else op.secondary
+    # Every node under its own id as well as its role alias: a step names its
+    # target by context key, and a product's trust push targets several nodes
+    # that have no role alias between them. Mirrors
+    # ``context.provision_context_nodes`` — the preview and the run must expand
+    # to the same rows or the panel renumbers itself mid-deploy.
+    aliases.update(by_id)
     aliases[PRIMARY] = by_id[primary_id]
     if secondary_id:
         aliases[SECONDARY] = by_id[secondary_id]
@@ -233,58 +266,38 @@ def build_execution_groups(
             # the template/config, exactly as the runtime resolves them.
             sibling = ops_by_id.get(op.id.removesuffix(PROVISION_SUFFIX), op)
             template = sibling.params.get("template", "")
-            context = _preview_context(topology, sibling)
-            if template in LINUX_PRODUCT_TEMPLATES:
-                product_label = {
-                    "certsecure": "Set up CertSecure Manager (stub)",
-                    "cbom": "Set up CBOM Secure (stub)",
-                    "codesign": "Set up CodeSign Secure (stub)",
-                }[template]
-                steps = [
-                    {
-                        "id": "service-setup",
-                        "label": product_label,
-                        "kind": "backend",
-                        "dependsOn": [],
-                    }
-                ]
-            else:
-                steps = [
-                    {
-                        "id": "agent-ready",
-                        "label": "Wait for executor agent",
-                        "kind": "wait",
-                        "dependsOn": [],
-                    },
-                    {
-                        "id": "boot-settle",
-                        "label": "Wait for first boot to settle",
-                        "kind": "wait",
-                        "dependsOn": ["agent-ready"],
-                    },
-                ]
+            context = _preview_context(topology, sibling, primary_template=template)
+            steps = [
+                {
+                    "id": "agent-ready",
+                    "label": "Wait for executor agent",
+                    "kind": "wait",
+                    "dependsOn": [],
+                },
+                {
+                    "id": "boot-settle",
+                    "label": "Wait for first boot to settle",
+                    "kind": "wait",
+                    "dependsOn": ["agent-ready"],
+                },
+            ]
             for item in steps:
                 item["targetNodeId"] = op.target
-            # Only agent-backed guests get a step tail — a Linux product VM
-            # never reaches ``provision_steps`` at run time (``_run_provision_op``
-            # returns after its setup stub), so the preview must not show one.
-            if template not in LINUX_PRODUCT_TEMPLATES:
-                provision = provision_steps(
-                    template,
-                    ca_type=sibling.params.get("caType"),
-                    node_id=op.target,
-                    dns_records=context.dns_records,
-                )
-                tail = _manifest_steps(provision, context.nodes)
-                if tail:
-                    tail[0]["dependsOn"] = ["boot-settle"]
-                steps.extend(tail)
-            detail = (
-                "Service setup stub"
-                if template in LINUX_PRODUCT_TEMPLATES
-                else _PROVISION_DETAIL.get(target.role, "Boot & settle")
+            provision = provision_steps(
+                template,
+                ca_type=sibling.params.get("caType"),
+                node_id=op.target,
+                dns_records=context.dns_records,
+                integration=product_integration(topology, op.target),
             )
-            label = f"Provision {target.name} — {detail}"
+            tail = _manifest_steps(provision, context.nodes)
+            if tail:
+                tail[0]["dependsOn"] = ["boot-settle"]
+            steps.extend(tail)
+            label = (
+                f"Provision {target.name} — "
+                f"{_PROVISION_DETAIL.get(target.role, 'Boot & settle')}"
+            )
         else:
             context = _preview_context(topology, op)
             steps = _manifest_steps(op_sequence(kind, context), context.nodes)

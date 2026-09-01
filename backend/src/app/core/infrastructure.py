@@ -24,6 +24,13 @@ PKI_ROLES: tuple[PkiRole, ...] = (
 )
 PRODUCT_ROLES: tuple[PkiRole, ...] = ("certsecure", "cbom", "codesign")
 LINUX_PRODUCT_TEMPLATES = frozenset(PRODUCT_ROLES)
+#: Products whose installation tree ships on the firstboot ISO and whose
+#: provision op runs a real sequence. Every product template gets the Linux
+#: agent (so its presence dot is honest and it is commandable); only these carry
+#: a payload and an install. A product absent here provisions to "agent
+#: connected, boot settled" and nothing more, which is what CBOM Secure and
+#: CodeSign Secure do until their own installers are wired.
+PAYLOAD_PRODUCT_TEMPLATES = frozenset({"certsecure"})
 LINUX_PRODUCT_BASE = "ub-24.04-base"
 LINUX_PRODUCT_GUEST_OS = "ubuntu-64"
 REQUIRED_AGENT_COMMANDS = frozenset(

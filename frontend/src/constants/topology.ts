@@ -23,6 +23,11 @@ export const EDGE_TYPE = {
   domainJoin: "domainJoin",
   caHierarchy: "caHierarchy",
   webServerCert: "webServerCert",
+  // A Linux product appliance wired to a domain controller: "register my names
+  // in your zone and have your domain trust my certificate". Deliberately not a
+  // `domainJoin` — nothing joins the forest, no computer account is created,
+  // and the product stays a Linux box outside it.
+  productIntegration: "productIntegration",
   network: "network",
 } as const
 
@@ -34,6 +39,7 @@ export const CONNECTION_PORT = {
   domainBoundary: "domainBoundary",
   webHost: "webHost",
   probeCertificate: "probeCertificate",
+  productIntegration: "productIntegration",
 } as const
 
 export type ConnectionPort =

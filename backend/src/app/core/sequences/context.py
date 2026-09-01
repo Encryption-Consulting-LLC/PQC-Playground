@@ -250,6 +250,54 @@ def build_run_context(db, op, all_ops, topology=None) -> RunContext:
     )
 
 
+def provision_context_nodes(
+    db, topology, primary: NodeContext
+) -> dict[str, NodeContext]:
+    """The node map a **createVm provision** op resolves its steps against.
+
+    Historically this was ``{primary: <the node being provisioned>}`` and
+    nothing else, which is all a DC or root-CA tail ever targets. A product's
+    tail targets other machines — it registers DNS at the domain controller and
+    pushes its certificate into every Windows node's root store — so it needs
+    them resolvable by name.
+
+    Every node is keyed by its **canvas node id** as well as under the role
+    aliases, because a step names its target by context key and the product's
+    fan-out has no role alias to use (there are several trust targets and they
+    are all different roles). A sibling that is not registered yet is skipped
+    rather than raising: for the Windows tails it was never there in the first
+    place, and a product only ever reaches this after the compiler has made it
+    depend on those exact nodes being provisioned.
+    """
+    nodes: dict[str, NodeContext] = {PRIMARY: primary, primary.node_id: primary}
+    if topology is None:
+        return nodes
+
+    from app.core.topology import TopologyRole
+
+    role_aliases = {
+        TopologyRole.domain_controller: DC,
+        TopologyRole.root_ca: ROOT,
+        TopologyRole.issuing_ca: CA,
+        TopologyRole.web_server: WEB,
+    }
+    for topology_node in topology.nodes:
+        if topology_node.id == primary.node_id:
+            continue
+        try:
+            resolved = _resolve_node(db, topology_node.id)
+        except ContextError:
+            continue
+        nodes[topology_node.id] = resolved
+        alias = role_aliases.get(topology_node.role)
+        # First writer wins, matching ``build_run_context``: a plan with two
+        # nodes of one role would otherwise have the alias mean whichever came
+        # last in the node list.
+        if alias is not None and alias not in nodes:
+            nodes[alias] = resolved
+    return nodes
+
+
 def build_teardown_context(db, topology, primary_id: str) -> RunContext:
     """Resolve all surviving topology nodes for teardown action sequences."""
 

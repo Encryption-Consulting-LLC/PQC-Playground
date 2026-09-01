@@ -13,9 +13,12 @@ the guest or the backend named a missing DLL. The guard turns that into a named
 firstboot error carrying the exit code.
 """
 
-from app.core.firstboot import _AGENT_INSTALL_SCRIPT
+from app.core.firstboot import _AGENT_INSTALL_SCRIPTS
 
-SCRIPT = _AGENT_INSTALL_SCRIPT.read_text(encoding="utf-8")
+_WINDOWS_INSTALL_SCRIPT = _AGENT_INSTALL_SCRIPTS["windows"]
+_LINUX_INSTALL_SCRIPT = _AGENT_INSTALL_SCRIPTS["linux"]
+
+SCRIPT = _WINDOWS_INSTALL_SCRIPT.read_text(encoding="utf-8")
 
 #: Comments are stripped before any ordering assertion: this script documents
 #: the very failure it guards against, so the prose contains every phrase the
@@ -27,8 +30,10 @@ CODE = "\n".join(
 
 
 def test_the_install_step_ships_where_the_code_expects_it() -> None:
-    assert _AGENT_INSTALL_SCRIPT.exists()
-    assert _AGENT_INSTALL_SCRIPT.name == "40-install-executor.ps1"
+    assert _WINDOWS_INSTALL_SCRIPT.exists()
+    assert _WINDOWS_INSTALL_SCRIPT.name == "40-install-executor.ps1"
+    assert _LINUX_INSTALL_SCRIPT.exists()
+    assert _LINUX_INSTALL_SCRIPT.name == "40-install-executor.sh"
 
 
 def test_a_failed_service_install_is_not_reported_as_success() -> None:
@@ -50,3 +55,53 @@ def test_the_failure_is_reported_with_its_exit_code() -> None:
 
 def test_the_step_still_stops_on_powershell_errors() -> None:
     assert "$ErrorActionPreference = 'Stop'" in SCRIPT
+
+
+# --------------------------------------------------------------------------- #
+# The Linux half. Same three properties, expressed in the shell's own terms.   #
+# --------------------------------------------------------------------------- #
+
+LINUX = _LINUX_INSTALL_SCRIPT.read_text(encoding="utf-8")
+LINUX_CODE = "\n".join(
+    line for line in LINUX.splitlines() if not line.lstrip().startswith("#")
+)
+
+
+def test_the_linux_step_aborts_on_any_failed_command() -> None:
+    # `set -e` is the shell's `$ErrorActionPreference = 'Stop'`; `-u` catches
+    # the unset-variable typo that would otherwise install to an empty path,
+    # and `-o pipefail` keeps a failure inside a pipeline from being masked by
+    # a successful tail.
+    assert "set -euo pipefail" in LINUX_CODE
+
+
+def test_the_linux_step_makes_the_agent_executable() -> None:
+    # The v2 Linux runner copies payload files with no execute bit — only
+    # *scripts* get one — so a plain copy yields a binary systemd cannot exec,
+    # which presents as an agent that never phones home rather than as anything
+    # about permissions.
+    assert "install -D -m 0755" in LINUX_CODE
+    assert "/usr/local/bin/pki-executor" in LINUX_CODE
+
+
+def test_the_linux_config_is_root_only() -> None:
+    # The config carries the agent's bearer token; this is the icacls
+    # equivalent, and every reader of the file can impersonate the agent.
+    assert "-m 0600" in LINUX_CODE
+    assert "/etc/pki-executor/config.toml" in LINUX_CODE
+
+
+def test_the_linux_step_enables_but_never_starts_the_service() -> None:
+    # The firstboot runner owns the single reboot, which is what brings the unit
+    # up — the same AutoStart contract the Windows service installer follows.
+    # Starting here would race the reboot with a half-configured network.
+    assert "systemctl enable pki-executor.service" in LINUX_CODE
+    assert "systemctl start" not in LINUX_CODE
+
+
+def test_the_linux_step_refuses_a_pre_v2_runner() -> None:
+    # A pre-v2 runner ignores the manifest's `files`, so the payload was never
+    # staged; failing loudly beats a confusing path error on a VM nobody can
+    # reach.
+    assert "FIRSTBOOT_FILES_DIR" in LINUX_CODE
+    assert "exit 1" in LINUX_CODE
